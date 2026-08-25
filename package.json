@@ -1,0 +1,15 @@
+{
+  "name": "100serieaserieb-api-calcio",
+  "version": "1.0.0",
+  "description": "API gratuita di calcio basata sui dati ESPN per 100%SerieA&SerieB",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "luxon": "^3.7.2"
+  }
+}
