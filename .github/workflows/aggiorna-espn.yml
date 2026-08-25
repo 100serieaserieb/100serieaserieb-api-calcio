@@ -1,14 +1,6 @@
-name: Aggiornamento ESPN
-
-on:
-  schedule:
-    - cron: "* * * * *"
-  workflow_dispatch:
-
-jobs:
-  aggiorna:
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Chiama API Vercel
-        run: curl -f "https://100serieaserieb-api-calcio.vercel.app/api/cron/aggiorna-espn"
+export default async function handler(req, res) {
+  return res.status(200).json({
+    success: true,
+    messaggio: "Cron ESPN funzionante"
+  });
+}
