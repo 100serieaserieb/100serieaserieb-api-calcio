@@ -16,11 +16,15 @@ function getRomeDateTime(date) {
 }
 
 function getCompetitor(competitors, side) {
-  if (!Array.isArray(competitors)) return null;
+  if (!Array.isArray(competitors)) {
+    return null;
+  }
 
-  return competitors.find(
-    item => item.homeAway === side
-  ) || null;
+  return (
+    competitors.find(
+      item => item.homeAway === side
+    ) || null
+  );
 }
 
 function getEventType(event) {
@@ -30,7 +34,10 @@ function getEventType(event) {
     return event.type;
   }
 
-  if (event.type && typeof event.type === "object") {
+  if (
+    event.type &&
+    typeof event.type === "object"
+  ) {
     return (
       event.type.text ||
       event.type.name ||
@@ -42,14 +49,71 @@ function getEventType(event) {
   return "";
 }
 
+function getEventMinute(event) {
+  if (!event) return null;
+
+  if (
+    event.clock &&
+    typeof event.clock === "object"
+  ) {
+    return (
+      event.clock.displayValue ||
+      null
+    );
+  }
+
+  if (typeof event.clock === "string") {
+    return event.clock;
+  }
+
+  return null;
+}
+
+function getEventText(event) {
+  if (!event) return "";
+
+  if (typeof event.text === "string") {
+    return event.text;
+  }
+
+  return "";
+}
+
 function getPlayerFromText(text) {
   if (!text) return null;
+
+  /*
+   * GOL
+   *
+   * Esempio:
+   * Goal! Udinese 1, Como 0.
+   * Hassane Kamara (Udinese) ...
+   */
+
+  if (text.startsWith("Goal!")) {
+    const goalMatch = text.match(
+      /Goal![^.]*\.\s*([^()]+)\s*\(/
+    );
+
+    if (goalMatch) {
+      return goalMatch[1].trim();
+    }
+  }
+
+  /*
+   * CARTELLINI
+   *
+   * Esempio:
+   * Jakub Piotrowski (Udinese) ...
+   */
 
   const match = text.match(
     /^([^(]+)\s*\(/
   );
 
-  if (!match) return null;
+  if (!match) {
+    return null;
+  }
 
   return match[1].trim();
 }
@@ -61,25 +125,36 @@ function getAssistFromText(text) {
     /Assisted by ([^.]+?)(?:\s+with|\s+following|\.|$)/
   );
 
-  return match ? match[1].trim() : null;
+  if (!match) {
+    return null;
+  }
+
+  return match[1].trim();
 }
 
 function parseEvent(event) {
-  if (!event) return null;
+  if (!event) {
+    return null;
+  }
 
-  const type = getEventType(event);
+  const type =
+    getEventType(event);
+
   const text =
-    typeof event.text === "string"
-      ? event.text
-      : "";
+    getEventText(event);
 
   const lowerType =
     type.toLowerCase();
 
   const result = {
     id: event.id || null,
-    type: type || null,
-    minute: event.clock || null,
+
+    type:
+      type || null,
+
+    minute:
+      getEventMinute(event),
+
     team:
       typeof event.team === "string"
         ? normalizeTeamName(event.team)
@@ -88,12 +163,22 @@ function parseEvent(event) {
               event.team.displayName
             )
           : null,
+
     player: null,
+
     assist: null,
-    text: text || null
+
+    text:
+      text || null
   };
 
-  if (lowerType.includes("goal")) {
+  /*
+   * GOL
+   */
+
+  if (
+    lowerType.includes("goal")
+  ) {
     result.player =
       getPlayerFromText(text);
 
@@ -103,14 +188,26 @@ function parseEvent(event) {
     return result;
   }
 
-  if (lowerType.includes("yellow")) {
+  /*
+   * CARTELLINO GIALLO
+   */
+
+  if (
+    lowerType.includes("yellow")
+  ) {
     result.player =
       getPlayerFromText(text);
 
     return result;
   }
 
-  if (lowerType.includes("red")) {
+  /*
+   * CARTELLINO ROSSO
+   */
+
+  if (
+    lowerType.includes("red")
+  ) {
     result.player =
       getPlayerFromText(text);
 
@@ -128,6 +225,10 @@ module.exports = async (req, res) => {
     const eventId =
       req.query.id;
 
+    /*
+     * CONTROLLO PARAMETRI
+     */
+
     if (!competitionId) {
       return res.status(400).json({
         success: false,
@@ -144,8 +245,14 @@ module.exports = async (req, res) => {
       });
     }
 
+    /*
+     * COMPETIZIONE
+     */
+
     const competition =
-      getCompetition(competitionId);
+      getCompetition(
+        competitionId
+      );
 
     if (!competition) {
       return res.status(404).json({
@@ -163,20 +270,34 @@ module.exports = async (req, res) => {
       });
     }
 
+    /*
+     * RICHIESTA A ESPN
+     */
+
     const summary =
       await getMatchSummary(
         competition.espnLeague,
         eventId
       );
 
+    /*
+     * HEADER
+     */
+
     const header =
       summary.header || {};
 
     const competitionInfo =
-      header.competitions?.[0] || null;
+      header.competitions?.[0] ||
+      null;
 
     const competitors =
-      competitionInfo?.competitors || [];
+      competitionInfo?.competitors ||
+      [];
+
+    /*
+     * SQUADRE
+     */
 
     const home =
       getCompetitor(
@@ -190,13 +311,23 @@ module.exports = async (req, res) => {
         "away"
       );
 
-    const date =
+    /*
+     * DATA E ORA
+     */
+
+    const matchDate =
       header.date ||
       competitionInfo?.date ||
       null;
 
     const dateTime =
-      getRomeDateTime(date);
+      getRomeDateTime(
+        matchDate
+      );
+
+    /*
+     * LOGHI
+     */
 
     const homeLogo =
       home?.team?.logos?.[0]?.href ||
@@ -208,11 +339,20 @@ module.exports = async (req, res) => {
       away?.team?.logo ||
       null;
 
+    /*
+     * EVENTI
+     */
+
     const rawEvents = [
-      ...(Array.isArray(summary.keyEvents)
+      ...(Array.isArray(
+        summary.keyEvents
+      )
         ? summary.keyEvents
         : []),
-      ...(Array.isArray(summary.plays)
+
+      ...(Array.isArray(
+        summary.plays
+      )
         ? summary.plays
         : [])
     ];
@@ -222,32 +362,51 @@ module.exports = async (req, res) => {
         .map(parseEvent)
         .filter(Boolean);
 
+    /*
+     * RISPOSTA
+     */
+
     return res.status(200).json({
+
       success: true,
 
       source: "ESPN",
 
-      timezone: "Europe/Rome",
+      timezone:
+        "Europe/Rome",
 
       competition: {
-        id: competition.id,
-        name: competition.name,
+        id:
+          competition.id,
+
+        name:
+          competition.name,
+
         espnLeague:
           competition.espnLeague
       },
 
       match: {
-        id: eventId,
 
-        date: dateTime
-          ? dateTime.toFormat("dd/MM/yyyy")
-          : null,
+        id:
+          eventId,
 
-        time: dateTime
-          ? dateTime.toFormat("HH:mm")
-          : null,
+        date:
+          dateTime
+            ? dateTime.toFormat(
+                "dd/MM/yyyy"
+              )
+            : null,
+
+        time:
+          dateTime
+            ? dateTime.toFormat(
+                "HH:mm"
+              )
+            : null,
 
         home: {
+
           name:
             home?.team?.displayName
               ? normalizeTeamName(
@@ -263,6 +422,7 @@ module.exports = async (req, res) => {
         },
 
         away: {
+
           name:
             away?.team?.displayName
               ? normalizeTeamName(
@@ -278,54 +438,68 @@ module.exports = async (req, res) => {
         },
 
         status: {
+
           state:
             competitionInfo
               ?.status
               ?.type
-              ?.state || null,
+              ?.state ||
+            null,
 
           name:
             competitionInfo
               ?.status
               ?.type
-              ?.name || null,
+              ?.name ||
+            null,
 
           description:
             competitionInfo
               ?.status
               ?.type
-              ?.description || null,
+              ?.description ||
+            null,
 
           detail:
             competitionInfo
               ?.status
               ?.type
-              ?.detail || null,
+              ?.detail ||
+            null,
 
           clock:
             competitionInfo
               ?.status
-              ?.displayClock || null,
+              ?.displayClock ||
+            null,
 
           completed:
             competitionInfo
               ?.status
               ?.type
-              ?.completed || false
+              ?.completed ||
+            false
         }
       },
 
-      events,
+      events
 
-      lineups: null
     });
 
   } catch (error) {
-    console.error(error);
+
+    console.error(
+      "ESPN MATCH ERROR:",
+      error
+    );
 
     return res.status(500).json({
+
       success: false,
-      error: error.message
+
+      error:
+        error.message ||
+        "Errore interno"
     });
   }
 };
