@@ -1,0 +1,15 @@
+name: Aggiornamento ESPN
+
+on:
+  schedule:
+    - cron: '* * * * *'
+  workflow_dispatch:
+
+jobs:
+  aggiorna:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Chiama API Vercel
+        run: |
+          curl -f -X GET "https://100serieaserieb-api-calcio.vercel.app/api/cron/aggiorna-espn"
