@@ -12,14 +12,6 @@ const {
 
 const { DateTime } = require("luxon");
 
-function formatLineup(lineup) {
-  if (!lineup) {
-    return null;
-  }
-
-  return lineup;
-}
-
 function formatEvent(event) {
   if (!event) {
     return null;
@@ -40,96 +32,76 @@ function formatEvent(event) {
 
 module.exports = async (req, res) => {
   try {
-    const competitionId =
-      req.query.competition;
-
-    const eventId =
-      req.query.id;
+    const competitionId = req.query.competition;
+    const eventId = req.query.id;
 
     if (!competitionId) {
       return res.status(400).json({
         success: false,
-        error:
-          "Parametro competition obbligatorio"
+        error: "Parametro competition obbligatorio"
       });
     }
 
     if (!eventId) {
       return res.status(400).json({
         success: false,
-        error:
-          "Parametro id obbligatorio"
+        error: "Parametro id obbligatorio"
       });
     }
 
-    const competition =
-      getCompetition(competitionId);
+    const competition = getCompetition(competitionId);
 
     if (!competition) {
       return res.status(404).json({
         success: false,
-        error:
-          "Competizione non trovata"
+        error: "Competizione non trovata"
       });
     }
 
     if (!competition.espnLeague) {
       return res.status(400).json({
         success: false,
-        error:
-          "Codice ESPN della competizione non configurato"
+        error: "Codice ESPN della competizione non configurato"
       });
     }
 
-    const summary =
-      await getMatchSummary(
-        competition.espnLeague,
-        eventId
-      );
+    const summary = await getMatchSummary(
+      competition.espnLeague,
+      eventId
+    );
 
-    const header =
-      summary.header || {};
+    const header = summary.header || {};
 
     const competitionInfo =
-      header.competitions?.[0];
+      header.competitions?.[0] || null;
 
     const competitors =
       competitionInfo?.competitors || [];
 
-    const home =
-      competitors.find(
-        team => team.homeAway === "home"
-      );
+    const home = competitors.find(
+      team => team.homeAway === "home"
+    );
 
-    const away =
-      competitors.find(
-        team => team.homeAway === "away"
-      );
+    const away = competitors.find(
+      team => team.homeAway === "away"
+    );
 
     let dateTime = null;
 
     if (header.date) {
-      dateTime =
-        DateTime.fromISO(
-          header.date,
-          { zone: "utc" }
-        ).setZone("Europe/Rome");
+      dateTime = DateTime
+        .fromISO(header.date, {
+          zone: "utc"
+        })
+        .setZone("Europe/Rome");
     }
 
-    const events =
-      (summary.keyEvents || [])
-        .map(formatEvent)
-        .filter(Boolean);
-
-    const plays =
-      (summary.plays || [])
-        .map(formatEvent)
-        .filter(Boolean);
-
-    const allEvents = [
-      ...events,
-      ...plays
-    ];
+    const events = [
+      ...(summary.keyEvents || []),
+      ...(summary.plays || [])
+    ]
+      .map(formatEvent)
+      .filter(Boolean);
 
     return res.status(200).json({
       success: true,
@@ -141,8 +113,7 @@ module.exports = async (req, res) => {
       competition: {
         id: competition.id,
         name: competition.name,
-        espnLeague:
-          competition.espnLeague
+        espnLeague: competition.espnLeague
       },
 
       match: {
@@ -157,59 +128,51 @@ module.exports = async (req, res) => {
           : null,
 
         home: {
-          name:
-            normalizeTeamName(
-              home?.team?.displayName
-            ),
-          score:
-            home?.score ?? "-",
-          logo:
-            home?.team?.logo || null
+          name: normalizeTeamName(
+            home?.team?.displayName
+          ),
+          score: home?.score ?? "-",
+          logo: home?.team?.logo || null
         },
 
         away: {
-          name:
-            normalizeTeamName(
-              away?.team?.displayName
-            ),
-          score:
-            away?.score ?? "-",
-          logo:
-            away?.team?.logo || null
+          name: normalizeTeamName(
+            away?.team?.displayName
+          ),
+          score: away?.score ?? "-",
+          logo: away?.team?.logo || null
         },
 
         status: {
           state:
-            competitionInfo?.status?.type
-              ?.state ||
-            header.competitions?.[0]
-              ?.status?.type?.state ||
+            competitionInfo?.status?.type?.state ||
             null,
 
           name:
-            competitionInfo?.status?.type
-              ?.name || null,
+            competitionInfo?.status?.type?.name ||
+            null,
 
           description:
-            competitionInfo?.status?.type
-              ?.description || null,
+            competitionInfo?.status?.type?.description ||
+            null,
 
           detail:
-            competitionInfo?.status?.type
-              ?.detail || null,
+            competitionInfo?.status?.type?.detail ||
+            null,
+
+          clock:
+            competitionInfo?.status?.displayClock ||
+            null,
 
           completed:
-            competitionInfo?.status?.type
-              ?.completed || false
+            competitionInfo?.status?.type?.completed ||
+            false
         }
       },
 
-      events: allEvents,
+      events,
 
-      lineups:
-        summary.rosters ||
-        summary.lineups ||
-        null
+      lineups: null
     });
 
   } catch (error) {
