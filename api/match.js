@@ -1,45 +1,33 @@
 import { NextResponse } from "next/server";
 
-const ESPN_SITE =
+const ESPN_BASE =
   "https://site.api.espn.com/apis/site/v2/sports/soccer";
 
-const ESPN_CORE =
-  "https://sports.core.api.espn.com/v2/sports/soccer/leagues";
-
 const DEFAULT_LEAGUE = "ita.1";
+
 const TIMEZONE = "Europe/Rome";
-const CACHE_SECONDS = 15;
 
 /* =========================================================
-   GENERIC HELPERS
+   FETCH SICURO
 ========================================================= */
 
-async function fetchJSON(url, options = {}) {
-  const controller = new AbortController();
-
-  const timeout = setTimeout(
-    () => controller.abort(),
-    options.timeout || 12000
-  );
-
+async function fetchJSON(url) {
   try {
     const response = await fetch(url, {
-      ...options,
-      signal: controller.signal,
       headers: {
         Accept: "application/json",
         "User-Agent": "100SerieASerieB-API/1.0",
-        ...(options.headers || {}),
       },
-      next: {
-        revalidate: CACHE_SECONDS,
-      },
+      cache: "no-store",
     });
 
     if (!response.ok) {
       console.error(
-        `ESPN ${response.status}: ${url}`
+        "ESPN ERROR:",
+        response.status,
+        url
       );
+
       return null;
     }
 
@@ -47,21 +35,39 @@ async function fetchJSON(url, options = {}) {
   } catch (error) {
     console.error(
       "ESPN FETCH ERROR:",
-      url,
       error?.message || error
     );
 
     return null;
-  } finally {
-    clearTimeout(timeout);
   }
 }
 
-function firstDefined(...values) {
+/* =========================================================
+   HELPERS
+========================================================= */
+
+function arr(value) {
+  return Array.isArray(value) ? value : [];
+}
+
+function clean(value) {
+  if (
+    value === null ||
+    value === undefined
+  ) {
+    return null;
+  }
+
+  const text = String(value).trim();
+
+  return text || null;
+}
+
+function first(...values) {
   for (const value of values) {
     if (
-      value !== undefined &&
       value !== null &&
+      value !== undefined &&
       value !== ""
     ) {
       return value;
@@ -71,25 +77,11 @@ function firstDefined(...values) {
   return null;
 }
 
-function cleanString(value) {
+function number(value) {
   if (
+    value === null ||
     value === undefined ||
-    value === null
-  ) {
-    return null;
-  }
-
-  const result = String(value).trim();
-
-  return result.length > 0
-    ? result
-    : null;
-}
-
-function toNumber(value) {
-  if (
-    value === undefined ||
-    value === null
+    value === ""
   ) {
     return null;
   }
@@ -106,45 +98,40 @@ function toNumber(value) {
 
   if (!match) return null;
 
-  const number = Number(
+  const result = Number(
     match[0].replace(",", ".")
   );
 
-  return Number.isFinite(number)
-    ? number
+  return Number.isFinite(result)
+    ? result
     : null;
 }
 
-function getArray(value) {
-  return Array.isArray(value)
-    ? value
-    : [];
-}
-
-function unique(array) {
-  return [
-    ...new Set(
-      array.filter(Boolean)
-    ),
-  ];
-}
-
-function normalizeName(value) {
+function name(value) {
   if (!value) return null;
 
   if (typeof value === "string") {
-    return cleanString(value);
+    return clean(value);
   }
 
-  return cleanString(
-    firstDefined(
+  return clean(
+    first(
       value.displayName,
       value.fullName,
       value.shortName,
-      value.name,
-      value.shortDisplayName
+      value.name
     )
   );
+}
+
+function unique(values) {
+  return [
+    ...new Set(
+      values
+        .map(clean)
+        .filter(Boolean)
+    ),
+  ];
 }
 
 /* =========================================================
@@ -155,9 +142,9 @@ function getLeague(request) {
   const url = new URL(request.url);
 
   return (
-    url.searchParams.get("league") ||
-    url.searchParams.get("competition") ||
-    DEFAULT_LEAGUE
+    clean(
+      url.searchParams.get("league")
+    ) || DEFAULT_LEAGUE
   );
 }
 
@@ -176,41 +163,38 @@ function normalizeTeam(team) {
     };
   }
 
-  const teamObject =
-    team.team || team;
-
-  const logo =
-    firstDefined(
-      teamObject.logo,
-      teamObject.logos?.[0]?.href,
-      team.logo,
-      team.logos?.[0]?.href
-    );
-
   return {
-    id: cleanString(
-      firstDefined(
-        teamObject.id,
+    id: clean(
+      first(
         team.id,
-        team.uid
+        team.team?.id
       )
     ),
 
-    name: normalizeName(
-      teamObject
+    name: name(
+      first(
+        team.team,
+        team
+      )
     ),
 
-    abbreviation: cleanString(
-      firstDefined(
-        teamObject.abbreviation,
+    abbreviation: clean(
+      first(
+        team.team?.abbreviation,
         team.abbreviation
       )
     ),
 
-    logo: cleanString(logo),
+    logo: clean(
+      first(
+        team.team?.logos?.[0]?.href,
+        team.logos?.[0]?.href,
+        team.logo
+      )
+    ),
 
-    score: toNumber(
-      firstDefined(
+    score: number(
+      first(
         team.score,
         team.score?.value
       )
@@ -222,31 +206,19 @@ function normalizeTeam(team) {
    STATUS
 ========================================================= */
 
-function normalizeStatus(
-  competition,
-  header = {}
-) {
+function normalizeStatus(competition) {
   const status =
-    competition?.status ||
-    header?.competitions?.[0]?.status ||
-    header?.status ||
-    {};
+    competition?.status || {};
 
   const type =
     status.type || {};
 
-  const completed =
-    Boolean(
-      firstDefined(
-        type.completed,
-        status.completed,
-        false
-      )
-    );
-
   let state = "scheduled";
 
-  if (completed) {
+  if (
+    type.completed === true ||
+    status.completed === true
+  ) {
     state = "terminata";
   } else if (
     type.state === "in" ||
@@ -258,35 +230,37 @@ function normalizeStatus(
   return {
     state,
 
-    name: cleanString(
-      firstDefined(
+    name: clean(
+      first(
         type.name,
         status.name
       )
     ),
 
-    description: cleanString(
-      firstDefined(
+    description: clean(
+      first(
         type.description,
         status.description
       )
     ),
 
-    detail: cleanString(
-      firstDefined(
+    detail: clean(
+      first(
         type.detail,
         status.detail
       )
     ),
 
-    clock: cleanString(
-      firstDefined(
+    clock: clean(
+      first(
         status.displayClock,
         status.clock
       )
     ),
 
-    completed,
+    completed:
+      type.completed === true ||
+      status.completed === true,
   };
 }
 
@@ -294,18 +268,9 @@ function normalizeStatus(
    VENUE
 ========================================================= */
 
-function normalizeVenue(
-  competition,
-  summary
-) {
+function normalizeVenue(competition) {
   const venue =
-    firstDefined(
-      competition?.venue,
-      competition?.venue?.venue,
-      summary?.gameInfo?.venue,
-      summary?.gameInfo?.venue?.venue,
-      summary?.header?.competitions?.[0]?.venue
-    );
+    competition?.venue;
 
   if (!venue) return null;
 
@@ -313,115 +278,79 @@ function normalizeVenue(
     venue.address || {};
 
   return {
-    id: cleanString(
-      venue.id
-    ),
+    id: clean(venue.id),
 
-    name: cleanString(
-      firstDefined(
+    name: clean(
+      first(
         venue.fullName,
-        venue.name,
-        venue.displayName
+        venue.name
       )
     ),
 
-    city: cleanString(
+    city: clean(
       address.city
     ),
 
-    country: cleanString(
-      firstDefined(
+    country: clean(
+      first(
         address.country,
         address.countryName
       )
     ),
 
-    capacity: toNumber(
+    capacity: number(
       venue.capacity
     ),
 
-    indoor:
-      typeof venue.indoor === "boolean"
-        ? venue.indoor
-        : null,
-
-    address: cleanString(
-      firstDefined(
+    address: clean(
+      first(
         address.fullAddress,
-        address.street,
-        address.city
+        address.street
       )
     ),
   };
 }
 
 /* =========================================================
-   TV / BROADCAST
+   TV
 ========================================================= */
 
-function normalizeBroadcasts(
-  summary,
-  competition
-) {
-  const channels = [];
+function normalizeTV(summary) {
+  const result = [];
 
-  const sources = [
-    ...getArray(
-      competition?.broadcasts
-    ),
-
-    ...getArray(
-      summary?.broadcasts
-    ),
-
-    ...getArray(
-      summary?.header
-        ?.competitions?.[0]
-        ?.broadcasts
-    ),
-
-    ...getArray(
-      summary?.gameInfo?.broadcasts
-    ),
-  ];
-
-  for (const broadcast of sources) {
-    const possibleNames = [
+  for (const broadcast of arr(
+    summary?.broadcasts
+  )) {
+    const values = [
       broadcast?.name,
       broadcast?.shortName,
-      broadcast?.longName,
       broadcast?.market,
       broadcast?.media?.name,
       broadcast?.media?.shortName,
-      broadcast?.media?.longName,
     ];
 
-    for (const name of possibleNames) {
-      const value =
-        cleanString(name);
+    for (const value of values) {
+      const item = clean(value);
 
-      if (value) {
-        channels.push(value);
+      if (item) {
+        result.push(item);
       }
     }
   }
 
-  return unique(channels);
+  return unique(result);
 }
 
 /* =========================================================
    OFFICIALS
 ========================================================= */
 
-function extractOfficialName(
-  official
-) {
+function getOfficialName(official) {
   if (!official) return null;
 
-  return normalizeName(
-    firstDefined(
+  return name(
+    first(
       official.athlete,
-      official.person,
       official.displayName,
       official.fullName,
       official.name
@@ -429,25 +358,7 @@ function extractOfficialName(
   );
 }
 
-function getOfficialRole(
-  official
-) {
-  return String(
-    firstDefined(
-      official?.type?.text,
-      official?.type?.name,
-      official?.position,
-      official?.role,
-      official?.officialType,
-      ""
-    )
-  ).toLowerCase();
-}
-
-function normalizeOfficials(
-  summary,
-  coreOfficials
-) {
+function normalizeOfficials(summary) {
   const result = {
     referee: null,
     assistantReferee1: null,
@@ -457,68 +368,42 @@ function normalizeOfficials(
     avar: null,
   };
 
-  const sources = [
-    ...getArray(
-      summary?.officials
-    ),
-
-    ...getArray(
-      summary?.gameInfo?.officials
-    ),
-
-    ...getArray(
-      summary?.competition?.officials
-    ),
-
-    ...getArray(
-      summary?.header
-        ?.competitions?.[0]
-        ?.officials
-    ),
-
-    ...getArray(
-      coreOfficials?.items
-    ),
-
-    ...getArray(
-      coreOfficials?.officials
-    ),
-  ];
-
-  const officials = sources
-    .filter(Boolean);
+  const officials = arr(
+    summary?.officials
+  );
 
   for (const official of officials) {
-    const name =
-      extractOfficialName(
-        official
-      );
+    const officialName =
+      getOfficialName(official);
 
-    if (!name) continue;
+    if (!officialName) continue;
 
-    const role =
-      getOfficialRole(
-        official
-      );
+    const role = String(
+      first(
+        official.type?.text,
+        official.type?.name,
+        official.role,
+        official.position,
+        ""
+      )
+    ).toLowerCase();
 
     if (
       role.includes("avar") ||
-      role.includes("video assistant referee")
+      role.includes("video assistant")
     ) {
       if (!result.avar) {
-        result.avar = name;
+        result.avar = officialName;
       }
 
       continue;
     }
 
     if (
-      role === "var" ||
-      role.includes("video referee") ||
-      role.includes("video assistant")
+      role.includes("var")
     ) {
       if (!result.var) {
-        result.var = name;
+        result.var = officialName;
       }
 
       continue;
@@ -529,7 +414,8 @@ function normalizeOfficials(
       role.includes("4th")
     ) {
       if (!result.fourthOfficial) {
-        result.fourthOfficial = name;
+        result.fourthOfficial =
+          officialName;
       }
 
       continue;
@@ -537,15 +423,16 @@ function normalizeOfficials(
 
     if (
       role.includes("assistant") ||
-      role.includes("linesman") ||
-      role.includes("lineswoman")
+      role.includes("linesman")
     ) {
       if (!result.assistantReferee1) {
-        result.assistantReferee1 = name;
+        result.assistantReferee1 =
+          officialName;
       } else if (
         !result.assistantReferee2
       ) {
-        result.assistantReferee2 = name;
+        result.assistantReferee2 =
+          officialName;
       }
 
       continue;
@@ -556,28 +443,25 @@ function normalizeOfficials(
       role.includes("arbitro")
     ) {
       if (!result.referee) {
-        result.referee = name;
+        result.referee =
+          officialName;
       }
     }
   }
 
   /*
-   * Fallback: ESPN sometimes returns
-   * officials without the role.
+   * Fallback:
+   * se ESPN restituisce gli ufficiali
+   * senza il ruolo, usa l'ordine.
    */
 
   const names = unique(
     officials
-      .map(
-        extractOfficialName
-      )
+      .map(getOfficialName)
       .filter(Boolean)
   );
 
-  if (
-    !result.referee &&
-    names[0]
-  ) {
+  if (!result.referee && names[0]) {
     result.referee = names[0];
   }
 
@@ -605,17 +489,11 @@ function normalizeOfficials(
       names[3];
   }
 
-  if (
-    !result.var &&
-    names[4]
-  ) {
+  if (!result.var && names[4]) {
     result.var = names[4];
   }
 
-  if (
-    !result.avar &&
-    names[5]
-  ) {
+  if (!result.avar && names[5]) {
     result.avar = names[5];
   }
 
@@ -623,214 +501,14 @@ function normalizeOfficials(
 }
 
 /* =========================================================
-   STATISTICS
-========================================================= */
-
-function getStatisticValue(
-  statistics,
-  names
-) {
-  const wanted =
-    names.map((name) =>
-      String(name)
-        .toLowerCase()
-        .trim()
-    );
-
-  for (
-    const stat of getArray(
-      statistics
-    )
-  ) {
-    const statName =
-      String(
-        firstDefined(
-          stat?.name,
-          stat?.label,
-          stat?.abbreviation,
-          stat?.displayName,
-          ""
-        )
-      )
-        .toLowerCase()
-        .trim();
-
-    if (
-      wanted.some(
-        (wantedName) =>
-          statName ===
-            wantedName ||
-          statName.includes(
-            wantedName
-          )
-      )
-    ) {
-      return firstDefined(
-        stat?.displayValue,
-        stat?.value
-      );
-    }
-  }
-
-  return null;
-}
-
-function normalizeTeamStatistics(
-  teamStats
-) {
-  const statistics =
-    getArray(
-      teamStats?.statistics
-    );
-
-  return {
-    team: normalizeName(
-      firstDefined(
-        teamStats?.team,
-        teamStats?.competitor
-      )
-    ),
-
-    shots: toNumber(
-      getStatisticValue(
-        statistics,
-        [
-          "shots",
-          "total shots",
-          "tiri",
-        ]
-      )
-    ),
-
-    shotsOnTarget: toNumber(
-      getStatisticValue(
-        statistics,
-        [
-          "shots on target",
-          "shots on goal",
-          "tiri in porta",
-        ]
-      )
-    ),
-
-    possession: toNumber(
-      getStatisticValue(
-        statistics,
-        [
-          "possession",
-          "possesso",
-        ]
-      )
-    ),
-
-    corners: toNumber(
-      getStatisticValue(
-        statistics,
-        [
-          "corner kicks",
-          "corners",
-          "corner",
-          "calci d'angolo",
-        ]
-      )
-    ),
-
-    offsides: toNumber(
-      getStatisticValue(
-        statistics,
-        [
-          "offsides",
-          "offside",
-          "fuorigioco",
-        ]
-      )
-    ),
-
-    fouls: toNumber(
-      getStatisticValue(
-        statistics,
-        [
-          "fouls",
-          "falli",
-        ]
-      )
-    ),
-
-    yellowCards: toNumber(
-      getStatisticValue(
-        statistics,
-        [
-          "yellow cards",
-          "yellowcard",
-          "cartellini gialli",
-        ]
-      )
-    ),
-
-    redCards: toNumber(
-      getStatisticValue(
-        statistics,
-        [
-          "red cards",
-          "redcard",
-          "cartellini rossi",
-        ]
-      )
-    ),
-
-    saves: toNumber(
-      getStatisticValue(
-        statistics,
-        [
-          "saves",
-          "save",
-          "parades",
-          "parata",
-        ]
-      )
-    ),
-
-    penalties: null,
-  };
-}
-
-/* =========================================================
-   PENALTY STATISTICS
-========================================================= */
-
-function extractPenaltyStats(
-  statistics
-) {
-  const value =
-    getStatisticValue(
-      statistics,
-      [
-        "penalties",
-        "penalty kicks",
-        "rigori",
-      ]
-    );
-
-  if (value === null) {
-    return null;
-  }
-
-  return cleanString(
-    value
-  );
-}
-
-/* =========================================================
    LINEUPS
 ========================================================= */
 
-function extractPlayerName(
-  player
-) {
+function getPlayerName(player) {
   if (!player) return null;
 
-  return normalizeName(
-    firstDefined(
+  return name(
+    first(
       player.athlete,
       player.player,
       player.displayName,
@@ -840,161 +518,197 @@ function extractPlayerName(
   );
 }
 
-function normalizePlayer(
-  player
-) {
-  const athlete =
-    player?.athlete ||
-    player?.player ||
-    player;
+function normalizeLineup(competitor) {
+  const lineup =
+    competitor?.lineup ||
+    null;
 
-  const name =
-    extractPlayerName(
-      player
-    );
+  const players = arr(
+    lineup?.players ||
+    competitor?.players
+  );
 
-  if (!name) {
-    return null;
+  const result = [];
+
+  for (const player of players) {
+    const playerName =
+      getPlayerName(player);
+
+    if (!playerName) continue;
+
+    result.push({
+      id: clean(
+        first(
+          player.athlete?.id,
+          player.player?.id,
+          player.id
+        )
+      ),
+
+      name: playerName,
+
+      jersey: clean(
+        first(
+          player.jersey,
+          player.athlete?.jersey
+        )
+      ),
+
+      position: clean(
+        first(
+          player.position?.abbreviation,
+          player.position?.name,
+          player.athlete?.position?.abbreviation
+        )
+      ),
+
+      starter:
+        player.starter === true ||
+        player.status === "starter",
+
+      substitute:
+        player.substitute === true ||
+        player.status === "substitute",
+    });
   }
 
-  const starter =
-    player?.starter === true ||
-    player?.status === "starter" ||
-    player?.starter === 1;
-
-  const substitute =
-    player?.substitute === true ||
-    player?.status === "substitute" ||
-    player?.substitute === 1;
-
   return {
-    id: cleanString(
-      firstDefined(
-        athlete?.id,
-        player?.id
+    formation: clean(
+      first(
+        lineup?.formation,
+        competitor?.formation
       )
     ),
 
-    name,
-
-    jersey: cleanString(
-      firstDefined(
-        player?.jersey,
-        athlete?.jersey
-      )
+    starters: result.filter(
+      (p) => p.starter
     ),
 
-    position: cleanString(
-      firstDefined(
-        player?.position?.abbreviation,
-        player?.position?.name,
-        athlete?.position?.abbreviation,
-        athlete?.position?.name
-      )
+    substitutes: result.filter(
+      (p) => p.substitute
     ),
 
-    starter,
-
-    substitute,
+    players: result,
   };
 }
 
-function normalizeLineup(
-  competitor,
-  summary,
-  side
+/* =========================================================
+   STATISTICS
+========================================================= */
+
+function findStat(
+  statistics,
+  aliases
 ) {
-  const summaryRosters =
-    getArray(
-      summary?.rosters
-    );
+  const list = arr(statistics);
 
-  const roster =
-    summaryRosters.find(
-      (item) =>
-        item.homeAway === side ||
-        String(
-          item.team?.id
-        ) ===
-          String(
-            competitor?.team?.id
-          )
-    );
+  for (const stat of list) {
+    const statName = String(
+      first(
+        stat.name,
+        stat.label,
+        stat.abbreviation,
+        ""
+      )
+    ).toLowerCase();
 
-  const possibleSources = [
-    competitor?.lineup,
-    competitor?.roster,
-    competitor?.players,
-    roster,
-    roster?.roster,
-    roster?.players,
-  ];
-
-  let rawPlayers = [];
-
-  for (
-    const source of possibleSources
-  ) {
-    if (!source) continue;
-
-    const players =
-      getArray(
-        source?.players
-      ).length > 0
-        ? getArray(
-            source.players
-          )
-        : getArray(source);
-
-    if (
-      players.length > 0
-    ) {
-      rawPlayers =
-        players;
-
-      break;
+    for (const alias of aliases) {
+      if (
+        statName === alias ||
+        statName.includes(alias)
+      ) {
+        return first(
+          stat.displayValue,
+          stat.value
+        );
+      }
     }
   }
 
-  const players =
-    rawPlayers
-      .map(
-        normalizePlayer
-      )
-      .filter(Boolean);
+  return null;
+}
 
-  const starters =
-    players.filter(
-      (player) =>
-        player.starter
-    );
-
-  const substitutes =
-    players.filter(
-      (player) =>
-        player.substitute
-    );
-
-  const formation =
-    cleanString(
-      firstDefined(
-        competitor?.formation,
-        competitor?.lineup
-          ?.formation,
-        roster?.formation,
-        roster?.lineup
-          ?.formation
-      )
-    );
+function normalizeStats(boxscoreTeam) {
+  const statistics = arr(
+    boxscoreTeam?.statistics
+  );
 
   return {
-    formation,
+    team: name(
+      first(
+        boxscoreTeam?.team,
+        boxscoreTeam?.competitor
+      )
+    ),
 
-    starters,
+    tiri: number(
+      findStat(statistics, [
+        "shots",
+        "total shots",
+        "tiri",
+      ])
+    ),
 
-    substitutes,
+    tiriInPorta: number(
+      findStat(statistics, [
+        "shots on target",
+        "shots on goal",
+        "tiri in porta",
+      ])
+    ),
 
-    players,
+    possesso: number(
+      findStat(statistics, [
+        "possession",
+        "possesso",
+      ])
+    ),
+
+    calciDangolo: number(
+      findStat(statistics, [
+        "corner kicks",
+        "corners",
+        "corner",
+        "calci d'angolo",
+      ])
+    ),
+
+    fuorigioco: number(
+      findStat(statistics, [
+        "offsides",
+        "offside",
+        "fuorigioco",
+      ])
+    ),
+
+    falli: number(
+      findStat(statistics, [
+        "fouls",
+        "falli",
+      ])
+    ),
+
+    parate: number(
+      findStat(statistics, [
+        "saves",
+        "save",
+        "parate",
+      ])
+    ),
+
+    cartelliniGialli: number(
+      findStat(statistics, [
+        "yellow cards",
+        "yellow card",
+      ])
+    ),
+
+    cartelliniRossi: number(
+      findStat(statistics, [
+        "red cards",
+        "red card",
+      ])
+    ),
   };
 }
 
@@ -1002,247 +716,131 @@ function normalizeLineup(
    EVENTS
 ========================================================= */
 
-function getPlayTeam(
-  play
-) {
-  const competitor =
-    play?.competitor ||
-    play?.team ||
-    getArray(
-      play?.competitions
-    )[0];
-
-  return normalizeName(
-    firstDefined(
-      competitor?.team,
-      competitor
-    )
-  );
-}
-
-function getPlayPlayer(
-  play
-) {
-  return normalizeName(
-    firstDefined(
-      play?.athlete,
-      play?.player
-    )
-  );
-}
-
-function normalizeEvent(
-  play
-) {
+function normalizeEvent(play) {
   if (!play) return null;
 
-  const typeText =
-    String(
-      firstDefined(
-        play?.type?.text,
-        play?.type?.name,
-        play?.type,
-        ""
-      )
-    );
+  const rawType = String(
+    first(
+      play.type?.text,
+      play.type?.name,
+      play.type,
+      ""
+    )
+  );
 
-  const lower =
-    typeText.toLowerCase();
+  const typeText =
+    rawType.toLowerCase();
 
   let type = "altro";
 
   if (
-    lower.includes("goal") ||
-    lower.includes("gol")
+    typeText.includes("goal") ||
+    typeText.includes("gol")
   ) {
     type = "gol";
   } else if (
-    lower.includes("yellow") ||
-    lower.includes("giallo")
+    typeText.includes("yellow") ||
+    typeText.includes("giallo")
   ) {
-    type =
-      "cartellino_giallo";
+    type = "cartellino_giallo";
   } else if (
-    lower.includes("red") ||
-    lower.includes("rosso")
+    typeText.includes("red") ||
+    typeText.includes("rosso")
   ) {
-    type =
-      "cartellino_rosso";
+    type = "cartellino_rosso";
   } else if (
-    lower.includes("substitution") ||
-    lower.includes("sostituzione")
+    typeText.includes("substitution") ||
+    typeText.includes("sostituzione")
   ) {
-    type =
-      "sostituzione";
+    type = "sostituzione";
   } else if (
-    lower.includes("penalty") ||
-    lower.includes("rigore")
+    typeText.includes("penalty") ||
+    typeText.includes("rigore")
   ) {
     type = "rigore";
   } else if (
-    lower.includes("kickoff") ||
-    lower.includes("inizio")
+    typeText.includes("kickoff") ||
+    typeText.includes("inizio")
   ) {
     type = "inizio";
   } else if (
-    lower.includes("half") ||
-    lower.includes("halftime") ||
-    lower.includes("tempo") ||
-    lower.includes("intervallo")
+    typeText.includes("half") ||
+    typeText.includes("intervallo") ||
+    typeText.includes("tempo")
   ) {
     type = "intervallo";
   } else if (
-    lower.includes("end") ||
-    lower.includes("fine")
+    typeText.includes("end") ||
+    typeText.includes("fine")
   ) {
     type = "fine";
   } else if (
-    lower.includes("injury") ||
-    lower.includes("interruption") ||
-    lower.includes("interruzione")
+    typeText.includes("interruption") ||
+    typeText.includes("interruzione")
   ) {
-    type =
-      "interruzione";
+    type = "interruzione";
   }
 
-  const participants =
-    getArray(
-      play?.participants
-    );
+  const competition =
+    arr(play.competitions)[0];
 
-  let playerIn =
-    firstDefined(
-      play?.playerIn,
-      play?.substitution
-        ?.playerIn
-    );
-
-  let playerOut =
-    firstDefined(
-      play?.playerOut,
-      play?.substitution
-        ?.playerOut
-    );
-
-  if (
-    type === "sostituzione"
-  ) {
-    if (
-      !playerIn &&
-      participants.length
-    ) {
-      const foundIn =
-        participants.find(
-          (participant) =>
-            participant?.type === "in" ||
-            participant?.role === "in"
-        );
-
-      if (foundIn) {
-        playerIn =
-          foundIn.athlete ||
-          foundIn.player ||
-          foundIn;
-      }
-    }
-
-    if (
-      !playerOut &&
-      participants.length
-    ) {
-      const foundOut =
-        participants.find(
-          (participant) =>
-            participant?.type === "out" ||
-            participant?.role === "out"
-        );
-
-      if (foundOut) {
-        playerOut =
-          foundOut.athlete ||
-          foundOut.player ||
-          foundOut;
-      }
-    }
-  }
-
-  const text =
-    cleanString(
-      firstDefined(
-        play?.text,
-        play?.description
-      )
-    );
-
-  /*
-   * Fallback per sostituzioni
-   * direttamente dal testo ESPN.
-   */
-
-  if (
-    type === "sostituzione" &&
-    text
-  ) {
-    const substitutionMatch =
-      text.match(
-        /(?:Substitution|Sostituzione)[^.]*(?:,\s*)?([^.]*)\s+(?:replaces|entra al posto di|sostituisce)\s+([^.]*)/i
-      );
-
-    if (
-      substitutionMatch
-    ) {
-      if (!playerIn) {
-        playerIn =
-          substitutionMatch[1];
-      }
-
-      if (!playerOut) {
-        playerOut =
-          substitutionMatch[2];
-      }
-    }
-  }
+  const athlete =
+    play.athlete ||
+    play.player ||
+    null;
 
   return {
-    id: cleanString(
-      play?.id
-    ),
+    id: clean(play.id),
 
     type,
 
-    minute: cleanString(
-      firstDefined(
-        play?.clock?.displayValue,
-        play?.clock?.value,
-        play?.clock,
-        play?.minute
+    minute: clean(
+      first(
+        play.clock?.displayValue,
+        play.clock,
+        play.minute
       )
     ),
 
-    team:
-      getPlayTeam(play),
-
-    player:
-      getPlayPlayer(play),
-
-    assist: normalizeName(
-      firstDefined(
-        play?.assist,
-        play?.assist?.athlete
+    team: name(
+      first(
+        competition?.team,
+        competition?.competitor?.team,
+        play.team
       )
     ),
 
-    playerIn:
-      normalizeName(
-        playerIn
-      ),
+    player: name(
+      athlete
+    ),
 
-    playerOut:
-      normalizeName(
-        playerOut
-      ),
+    assist: name(
+      first(
+        play.assist,
+        play.assist?.athlete
+      )
+    ),
 
-    text,
+    playerIn: name(
+      first(
+        play.playerIn,
+        play.substitution?.playerIn
+      )
+    ),
+
+    playerOut: name(
+      first(
+        play.playerOut,
+        play.substitution?.playerOut
+      )
+    ),
+
+    text: clean(
+      first(
+        play.text,
+        play.description
+      )
+    ),
   };
 }
 
@@ -1254,61 +852,56 @@ function normalizePenalties(
   summary,
   plays
 ) {
-  const penalties = [];
+  const result = [];
 
-  for (
-    const penalty of getArray(
-      summary?.penalties
-    )
-  ) {
-    const result =
-      cleanString(
-        firstDefined(
-          penalty?.result,
-          penalty?.outcome,
-          penalty?.displayValue
-        )
-      );
+  for (const penalty of arr(
+    summary?.penalties
+  )) {
+    const text = String(
+      first(
+        penalty.result,
+        penalty.outcome,
+        penalty.displayValue,
+        ""
+      )
+    );
 
-    penalties.push({
-      minute: cleanString(
-        firstDefined(
-          penalty?.clock,
-          penalty?.minute
+    result.push({
+      minute: clean(
+        first(
+          penalty.minute,
+          penalty.clock
         )
       ),
 
-      team: normalizeName(
-        firstDefined(
-          penalty?.team,
-          penalty?.competitor
+      team: name(
+        first(
+          penalty.team,
+          penalty.competitor
         )
       ),
 
-      player: normalizeName(
-        firstDefined(
-          penalty?.athlete,
-          penalty?.player
+      player: name(
+        first(
+          penalty.athlete,
+          penalty.player
         )
       ),
 
-      result,
+      result: clean(text),
 
       scored:
-        typeof penalty?.scored ===
+        typeof penalty.scored ===
         "boolean"
           ? penalty.scored
           : null,
     });
   }
 
-  for (
-    const play of plays
-  ) {
-    const text =
-      String(
-        play?.text || ""
-      ).toLowerCase();
+  for (const play of plays) {
+    const text = String(
+      play?.text || ""
+    ).toLowerCase();
 
     if (
       !text.includes("penalty") &&
@@ -1317,137 +910,89 @@ function normalizePenalties(
       continue;
     }
 
-    const alreadyExists =
-      penalties.some(
-        (item) =>
-          item.minute ===
-            cleanString(
-              firstDefined(
-                play?.clock
-                  ?.displayValue,
-                play?.clock,
-                play?.minute
-              )
-            ) &&
-          item.player ===
-            normalizeName(
-              firstDefined(
-                play?.athlete,
-                play?.player
-              )
-            )
-      );
-
-    if (
-      alreadyExists
-    ) {
-      continue;
-    }
-
-    let scored = null;
-
-    if (
-      text.includes("scored") ||
-      text.includes("goal") ||
-      text.includes("segnato")
-    ) {
-      scored = true;
-    }
-
-    if (
-      text.includes("missed") ||
-      text.includes("saved") ||
-      text.includes("parato") ||
-      text.includes("sbagliato")
-    ) {
-      scored = false;
-    }
-
-    penalties.push({
-      minute: cleanString(
-        firstDefined(
-          play?.clock
-            ?.displayValue,
-          play?.clock,
-          play?.minute
+    result.push({
+      minute: clean(
+        first(
+          play.clock?.displayValue,
+          play.clock,
+          play.minute
         )
       ),
 
-      team:
-        getPlayTeam(play),
+      team: name(
+        first(
+          play.team,
+          play.competitor?.team
+        )
+      ),
 
-      player:
-        getPlayPlayer(play),
+      player: name(
+        first(
+          play.athlete,
+          play.player
+        )
+      ),
 
-      result:
-        cleanString(
-          play?.text
-        ),
+      result: clean(
+        play.text
+      ),
 
-      scored,
+      scored:
+        text.includes("scored") ||
+        text.includes("goal") ||
+        text.includes("segnato")
+          ? true
+          : text.includes("missed") ||
+            text.includes("saved") ||
+            text.includes("parato")
+          ? false
+          : null,
     });
   }
 
-  return penalties;
+  return result;
 }
 
 /* =========================================================
    MVP
 ========================================================= */
 
-function normalizeMVP(
-  summary
-) {
+function normalizeMVP(summary) {
   const candidates = [
     summary?.playerOfTheMatch,
     summary?.mvp,
-    summary?.gameInfo
-      ?.playerOfTheMatch,
     summary?.gameInfo?.mvp,
-    summary?.leaders
-      ?.playerOfTheMatch,
-    summary?.leaders?.[0],
   ];
 
-  for (
-    const candidate of candidates
-  ) {
-    if (!candidate) {
-      continue;
-    }
+  for (const candidate of candidates) {
+    if (!candidate) continue;
 
     const athlete =
-      candidate?.athlete ||
-      candidate?.player ||
+      candidate.athlete ||
+      candidate.player ||
       candidate;
 
-    const name =
-      normalizeName(
-        athlete
-      );
+    const playerName =
+      name(athlete);
 
-    if (!name) {
-      continue;
-    }
+    if (!playerName) continue;
 
     return {
-      name,
+      name: playerName,
 
-      team:
-        normalizeName(
-          firstDefined(
-            candidate?.team,
-            athlete?.team
-          )
-        ),
+      team: name(
+        first(
+          candidate.team,
+          athlete.team
+        )
+      ),
 
-      reason:
-        cleanString(
-          firstDefined(
-            candidate?.reason,
-            candidate?.description
-          )
-        ),
+      reason: clean(
+        first(
+          candidate.reason,
+          candidate.description
+        )
+      ),
     };
   }
 
@@ -1455,87 +1000,18 @@ function normalizeMVP(
 }
 
 /* =========================================================
-   COMPETITION
+   SEARCH MATCH
 ========================================================= */
 
-function findCompetition(
-  summary,
-  selectedEvent
-) {
-  return (
-    summary?.header
-      ?.competitions?.[0] ||
-    summary?.competitions?.[0] ||
-    selectedEvent
-      ?.competitions?.[0] ||
-    null
-  );
-}
-
-/* =========================================================
-   CORE OFFICIALS
-========================================================= */
-
-async function fetchCoreOfficials(
-  league,
-  eventId,
-  competitionId
-) {
-  if (
-    !eventId ||
-    !competitionId
-  ) {
-    return null;
-  }
-
-  const url =
-    `${ESPN_CORE}/${league}` +
-    `/events/${eventId}` +
-    `/competitions/${competitionId}` +
-    `/officials?limit=50`;
-
-  return fetchJSON(url);
-}
-
-/* =========================================================
-   CORE STATISTICS
-========================================================= */
-
-async function fetchCoreStats(
-  league,
-  eventId,
-  competitionId,
-  competitorId
-) {
-  if (
-    !eventId ||
-    !competitionId ||
-    !competitorId
-  ) {
-    return null;
-  }
-
-  const url =
-    `${ESPN_CORE}/${league}` +
-    `/events/${eventId}` +
-    `/competitions/${competitionId}` +
-    `/competitors/${competitorId}` +
-    `/statistics?limit=100`;
-
-  return fetchJSON(url);
-}
-
-/* =========================================================
-   SCOREBOARD SEARCH
-========================================================= */
-
-async function findEvent(
+async function searchMatch(
   league,
   query,
   date
 ) {
-  const params =
-    new URLSearchParams();
+  let endpoint =
+    `${ESPN_BASE}/${league}/scoreboard`;
+
+  const params = new URLSearchParams();
 
   if (date) {
     params.set(
@@ -1544,757 +1020,406 @@ async function findEvent(
     );
   }
 
-  params.set(
-    "limit",
-    "100"
-  );
+  params.set("limit", "100");
 
-  const url =
-    `${ESPN_SITE}/${league}/scoreboard?` +
-    params.toString();
+  endpoint +=
+    "?" + params.toString();
 
   const data =
-    await fetchJSON(url);
+    await fetchJSON(endpoint);
 
   const events =
-    getArray(
-      data?.events
-    );
+    arr(data?.events);
 
   if (!query) {
-    return (
-      events[0] || null
-    );
+    return events[0] || null;
   }
 
-  const normalizedQuery =
+  const search =
     query
       .toLowerCase()
       .trim();
 
-  /*
-   * Prima prova ricerca
-   * completa della coppia.
-   */
-
-  const queryParts =
-    normalizedQuery
-      .split(/\s+/)
-      .filter(Boolean);
-
-  const exact =
-    events.find(
-      (event) => {
-        const teams =
-          getArray(
-            event?.competitions?.[0]
-              ?.competitors
-          );
-
-        const names =
-          teams.map(
-            (team) =>
-              String(
-                firstDefined(
-                  team?.team
-                    ?.displayName,
-                  team?.team?.name,
-                  team?.displayName
-                ) || ""
-              ).toLowerCase()
-          );
-
-        return (
-          queryParts.length >= 2 &&
-          queryParts.every(
-            (part) =>
-              names.some(
-                (name) =>
-                  name.includes(
-                    part
-                  )
-              )
-          );
-        );
-      }
-    );
-
-  if (exact) {
-    return exact;
-  }
-
-  /*
-   * Fallback: basta trovare
-   * almeno una squadra.
-   */
-
   return (
-    events.find(
-      (event) => {
-        const teams =
-          getArray(
-            event?.competitions?.[0]
-              ?.competitors
-          );
-
-        const names =
-          teams.map(
-            (team) =>
-              String(
-                firstDefined(
-                  team?.team
-                    ?.displayName,
-                  team?.team?.name,
-                  team?.displayName
-                ) || ""
-              ).toLowerCase()
-          );
-
-        return names.some(
-          (name) =>
-            name.includes(
-              normalizedQuery
-            )
+    events.find((event) => {
+      const competitors =
+        arr(
+          event?.competitions?.[0]
+            ?.competitors
         );
-      }
-    ) || null
+
+      return competitors.some(
+        (competitor) => {
+          const team =
+            competitor?.team;
+
+          const values = [
+            team?.name,
+            team?.displayName,
+            team?.shortDisplayName,
+            team?.abbreviation,
+          ]
+            .filter(Boolean)
+            .map((x) =>
+              String(x).toLowerCase()
+            );
+
+          return values.some(
+            (value) =>
+              value.includes(search)
+          );
+        }
+      );
+    }) || null
   );
 }
 
 /* =========================================================
-   DATE
+   GET
 ========================================================= */
 
-function formatDateTime(
-  value
-) {
-  if (!value) {
-    return {
-      date: null,
-      time: null,
-    };
-  }
-
-  const date =
-    new Date(value);
-
-  if (
-    Number.isNaN(
-      date.getTime()
-    )
-  ) {
-    return {
-      date: cleanString(value),
-      time: null,
-    };
-  }
-
-  return {
-    date:
-      date.toLocaleDateString(
-        "it-IT",
-        {
-          timeZone: TIMEZONE,
-          day: "2-digit",
-          month: "2-digit",
-          year: "numeric",
-        }
-      ),
-
-    time:
-      date.toLocaleTimeString(
-        "it-IT",
-        {
-          timeZone: TIMEZONE,
-          hour: "2-digit",
-          minute: "2-digit",
-        }
-      ),
-  };
-}
-
-/* =========================================================
-   MAIN API
-========================================================= */
-
-export async function GET(
-  request
-) {
+export async function GET(request) {
   try {
     const url =
-      new URL(
-        request.url
-      );
+      new URL(request.url);
 
     const league =
       getLeague(request);
 
-    const eventId =
-      url.searchParams.get(
-        "id"
-      ) ||
-      url.searchParams.get(
-        "event"
-      ) ||
-      url.searchParams.get(
-        "matchId"
+    const id =
+      clean(
+        first(
+          url.searchParams.get("id"),
+          url.searchParams.get("event"),
+          url.searchParams.get("matchId")
+        )
       );
 
     const query =
-      url.searchParams.get(
-        "q"
-      ) ||
-      url.searchParams.get(
-        "search"
+      clean(
+        first(
+          url.searchParams.get("q"),
+          url.searchParams.get("search")
+        )
       );
 
     const date =
-      url.searchParams.get(
-        "date"
+      clean(
+        url.searchParams.get("date")
       );
 
-    let selectedEvent =
-      null;
+    /* -----------------------------------------------------
+       TROVA LA PARTITA
+    ----------------------------------------------------- */
 
-    /* =====================================================
-       1. EVENT ID
-    ===================================================== */
+    let event = null;
 
-    if (eventId) {
-      const params =
-        new URLSearchParams();
-
-      if (date) {
-        params.set(
-          "dates",
-          date.replaceAll(
-            "-",
-            ""
-          )
-        );
-      }
-
-      params.set(
-        "limit",
-        "100"
-      );
-
-      const scoreboard =
+    if (id) {
+      const data =
         await fetchJSON(
-          `${ESPN_SITE}/${league}/scoreboard?${params.toString()}`
+          `${ESPN_BASE}/${league}/scoreboard?limit=100`
         );
 
-      selectedEvent =
-        getArray(
-          scoreboard?.events
-        ).find(
-          (event) =>
-            String(
-              event?.id
-            ) ===
-            String(eventId)
+      event =
+        arr(data?.events).find(
+          (item) =>
+            String(item.id) ===
+            String(id)
         ) || null;
     }
 
-    /* =====================================================
-       2. SEARCH
-    ===================================================== */
-
-    if (
-      !selectedEvent &&
-      query
-    ) {
-      selectedEvent =
-        await findEvent(
+    if (!event) {
+      event =
+        await searchMatch(
           league,
           query,
           date
         );
     }
 
-    /* =====================================================
-       3. NOT FOUND
-    ===================================================== */
-
-    if (!selectedEvent) {
+    if (!event) {
       return NextResponse.json(
         {
           success: false,
           source: "ESPN",
           error:
-            "Partita non trovata",
-          query:
-            query || null,
-          eventId:
-            eventId || null,
+            "Partita non trovata.",
+          query: query || null,
+          eventId: id || null,
         },
-        {
-          status: 404,
-        }
+        { status: 404 }
       );
     }
 
-    const actualEventId =
-      String(
-        selectedEvent.id
-      );
+    const eventId =
+      String(event.id);
 
-    /* =====================================================
-       4. SUMMARY
-    ===================================================== */
+    /* -----------------------------------------------------
+       SUMMARY
+    ----------------------------------------------------- */
 
     const summary =
       await fetchJSON(
-        `${ESPN_SITE}/${league}/summary?event=${actualEventId}`
+        `${ESPN_BASE}/${league}/summary?event=${eventId}`
       );
 
     const competition =
-      findCompetition(
-        summary,
-        selectedEvent
-      );
+      summary?.header
+        ?.competitions?.[0] ||
+      summary?.competitions?.[0] ||
+      event?.competitions?.[0] ||
+      null;
 
     const competitors =
-      getArray(
+      arr(
         competition?.competitors
       );
 
     const homeRaw =
       competitors.find(
-        (team) =>
-          team?.homeAway ===
-          "home"
+        (item) =>
+          item.homeAway === "home"
       ) ||
       competitors[0] ||
       null;
 
     const awayRaw =
       competitors.find(
-        (team) =>
-          team?.homeAway ===
-          "away"
+        (item) =>
+          item.homeAway === "away"
       ) ||
       competitors[1] ||
       null;
 
     const home =
-      normalizeTeam(
-        homeRaw
-      );
+      normalizeTeam(homeRaw);
 
     const away =
-      normalizeTeam(
-        awayRaw
-      );
+      normalizeTeam(awayRaw);
 
-    /* =====================================================
-       5. CORE IDs
-    ===================================================== */
-
-    const competitionId =
-      cleanString(
-        firstDefined(
-          competition?.id,
-          selectedEvent
-            ?.competitions?.[0]
-            ?.id
-        )
-      );
-
-    const homeId =
-      cleanString(
-        firstDefined(
-          homeRaw?.team?.id,
-          homeRaw?.id
-        )
-      );
-
-    const awayId =
-      cleanString(
-        firstDefined(
-          awayRaw?.team?.id,
-          awayRaw?.id
-        )
-      );
-
-    /* =====================================================
-       6. RICH DATA
-    ===================================================== */
-
-    const [
-      coreOfficials,
-      homeCoreStats,
-      awayCoreStats,
-    ] =
-      await Promise.all([
-        fetchCoreOfficials(
-          league,
-          actualEventId,
-          competitionId
-        ),
-
-        fetchCoreStats(
-          league,
-          actualEventId,
-          competitionId,
-          homeId
-        ),
-
-        fetchCoreStats(
-          league,
-          actualEventId,
-          competitionId,
-          awayId
-        ),
-      ]);
-
-    /* =====================================================
-       7. LINEUPS
-    ===================================================== */
+    /* -----------------------------------------------------
+       LINEUPS
+    ----------------------------------------------------- */
 
     const homeLineup =
-      normalizeLineup(
-        homeRaw,
-        summary,
-        "home"
-      );
+      normalizeLineup(homeRaw);
 
     const awayLineup =
-      normalizeLineup(
-        awayRaw,
-        summary,
-        "away"
-      );
+      normalizeLineup(awayRaw);
 
-    /* =====================================================
-       8. BOXSCORE
-    ===================================================== */
-
-    const boxscore =
-      summary?.boxscore ||
-      null;
+    /* -----------------------------------------------------
+       BOXSCORE / STATISTICHE
+    ----------------------------------------------------- */
 
     const boxscoreTeams =
-      getArray(
-        boxscore?.teams
+      arr(
+        summary?.boxscore?.teams
       );
 
     const homeBox =
       boxscoreTeams.find(
-        (team) =>
-          team?.homeAway ===
-          "home"
+        (item) =>
+          item.homeAway === "home"
       );
 
     const awayBox =
       boxscoreTeams.find(
-        (team) =>
-          team?.homeAway ===
-          "away"
+        (item) =>
+          item.homeAway === "away"
       );
 
-    const homeStatsSource =
-      homeBox ||
-      {
-        team: home.name,
-        statistics:
-          homeCoreStats?.items ||
-          homeCoreStats
-            ?.statistics ||
-          [],
-      };
-
-    const awayStatsSource =
-      awayBox ||
-      {
-        team: away.name,
-        statistics:
-          awayCoreStats?.items ||
-          awayCoreStats
-            ?.statistics ||
-          [],
-      };
-
     const homeStats =
-      normalizeTeamStatistics(
-        homeStatsSource
+      normalizeStats(
+        homeBox
       );
 
     const awayStats =
-      normalizeTeamStatistics(
-        awayStatsSource
+      normalizeStats(
+        awayBox
       );
 
-    homeStats.penalties =
-      extractPenaltyStats(
-        homeStatsSource
-          ?.statistics
-      );
+    homeStats.team =
+      home.name;
 
-    awayStats.penalties =
-      extractPenaltyStats(
-        awayStatsSource
-          ?.statistics
-      );
+    awayStats.team =
+      away.name;
 
-    /* =====================================================
-       9. EVENTS
-    ===================================================== */
+    /* -----------------------------------------------------
+       EVENTI
+    ----------------------------------------------------- */
 
     const rawPlays =
-      getArray(
+      arr(
         summary?.plays
       );
 
     const events =
       rawPlays
-        .map(
-          normalizeEvent
-        )
+        .map(normalizeEvent)
         .filter(Boolean);
 
-    /* =====================================================
-       10. PENALTIES
-    ===================================================== */
+    /* -----------------------------------------------------
+       DATA / ORA
+    ----------------------------------------------------- */
 
-    const penalties =
-      normalizePenalties(
-        summary,
-        rawPlays
-      );
-
-    /* =====================================================
-       11. VENUE
-    ===================================================== */
-
-    const venue =
-      normalizeVenue(
-        competition,
-        summary
-      );
-
-    /* =====================================================
-       12. OFFICIALS
-    ===================================================== */
-
-    const officials =
-      normalizeOfficials(
-        summary,
-        coreOfficials
-      );
-
-    /* =====================================================
-       13. TV
-    ===================================================== */
-
-    const tv =
-      normalizeBroadcasts(
-        summary,
-        competition
-      );
-
-    /* =====================================================
-       14. MVP
-    ===================================================== */
-
-    const mvp =
-      normalizeMVP(
-        summary
-      );
-
-    /* =====================================================
-       15. DATE / TIME
-    ===================================================== */
-
-    const matchDate =
-      firstDefined(
+    const rawDate =
+      first(
         competition?.date,
-        selectedEvent?.date
+        event?.date
       );
 
-    const {
-      date: formattedDate,
-      time: formattedTime,
-    } =
-      formatDateTime(
-        matchDate
-      );
+    let formattedDate = null;
+    let formattedTime = null;
 
-    /* =====================================================
-       16. COMPETITION NAME
-    ===================================================== */
+    if (rawDate) {
+      const dateObject =
+        new Date(rawDate);
 
-    const competitionName =
-      cleanString(
-        firstDefined(
-          selectedEvent
-            ?.league?.name,
-          competition
-            ?.league?.name,
-          summary?.header
-            ?.league?.name,
-          "Serie A"
+      if (
+        !Number.isNaN(
+          dateObject.getTime()
         )
-      );
+      ) {
+        formattedDate =
+          dateObject.toLocaleDateString(
+            "it-IT",
+            {
+              timeZone: TIMEZONE,
+              day: "2-digit",
+              month: "2-digit",
+              year: "numeric",
+            }
+          );
 
-    const competitionEspnId =
-      cleanString(
-        firstDefined(
-          selectedEvent
-            ?.league?.id,
-          competition
-            ?.league?.id,
-          league
-        )
-      );
+        formattedTime =
+          dateObject.toLocaleTimeString(
+            "it-IT",
+            {
+              timeZone: TIMEZONE,
+              hour: "2-digit",
+              minute: "2-digit",
+            }
+          );
+      }
+    }
 
-    /* =====================================================
-       17. FINAL RESPONSE
-    ===================================================== */
-
-    const response = {
-      success: true,
-
-      source: "ESPN",
-
-      timezone: TIMEZONE,
-
-      competition: {
-        id:
-          competitionEspnId,
-
-        name:
-          competitionName,
-
-        espnLeague:
-          league,
-
-        season:
-          cleanString(
-            firstDefined(
-              selectedEvent
-                ?.season?.year,
-              competition
-                ?.season?.year,
-              selectedEvent
-                ?.season?.displayName
-            )
-          ),
-      },
-
-      match: {
-        id:
-          actualEventId,
-
-        date:
-          formattedDate ||
-          cleanString(
-            matchDate
-          ),
-
-        time:
-          formattedTime,
-
-        home: {
-          ...home,
-
-          score:
-            home.score ??
-            toNumber(
-              homeRaw?.score
-            ),
-        },
-
-        away: {
-          ...away,
-
-          score:
-            away.score ??
-            toNumber(
-              awayRaw?.score
-            ),
-        },
-
-        status:
-          normalizeStatus(
-            competition,
-            summary?.header
-          ),
-      },
-
-      /*
-       * FORMAZIONI
-       */
-
-      lineups: {
-        home:
-          homeLineup,
-
-        away:
-          awayLineup,
-      },
-
-      /*
-       * STATISTICHE
-       */
-
-      statistics: {
-        home: {
-          ...homeStats,
-
-          team:
-            home.name ||
-            homeStats.team,
-        },
-
-        away: {
-          ...awayStats,
-
-          team:
-            away.name ||
-            awayStats.team,
-        },
-      },
-
-      /*
-       * RIGORI
-       */
-
-      penalties,
-
-      /*
-       * STADIO
-       */
-
-      venue,
-
-      /*
-       * TERNA ARBITRALE
-       */
-
-      officials,
-
-      /*
-       * TV
-       */
-
-      tv,
-
-      /*
-       * MVP
-       */
-
-      mvp,
-
-      /*
-       * EVENTI
-       */
-
-      events,
-    };
+    /* -----------------------------------------------------
+       RISPOSTA
+    ----------------------------------------------------- */
 
     return NextResponse.json(
-      response,
+      {
+        success: true,
+
+        source: "ESPN",
+
+        timezone: TIMEZONE,
+
+        competition: {
+          id: clean(
+            first(
+              event?.league?.id,
+              competition?.league?.id
+            )
+          ),
+
+          name: clean(
+            first(
+              event?.league?.name,
+              competition?.league?.name
+            )
+          ),
+
+          espnLeague: league,
+
+          season: clean(
+            first(
+              event?.season?.year,
+              competition?.season?.year
+            )
+          ),
+        },
+
+        match: {
+          id: eventId,
+
+          date:
+            formattedDate ||
+            clean(rawDate),
+
+          time:
+            formattedTime,
+
+          home: {
+            ...home,
+
+            score:
+              home.score ??
+              number(
+                homeRaw?.score
+              ),
+          },
+
+          away: {
+            ...away,
+
+            score:
+              away.score ??
+              number(
+                awayRaw?.score
+              ),
+          },
+
+          status:
+            normalizeStatus(
+              competition
+            ),
+        },
+
+        lineups: {
+          home: homeLineup,
+          away: awayLineup,
+        },
+
+        statistics: {
+          home: homeStats,
+          away: awayStats,
+        },
+
+        penalties:
+          normalizePenalties(
+            summary,
+            rawPlays
+          ),
+
+        venue:
+          normalizeVenue(
+            competition
+          ),
+
+        referee:
+          normalizeOfficials(
+            summary
+          ).referee,
+
+        officials:
+          normalizeOfficials(
+            summary
+          ),
+
+        tv:
+          normalizeTV(
+            summary
+          ),
+
+        mvp:
+          normalizeMVP(
+            summary
+          ),
+
+        events,
+      },
+
       {
         status: 200,
 
@@ -2306,7 +1431,7 @@ export async function GET(
     );
   } catch (error) {
     console.error(
-      "MATCH API ERROR:",
+      "MATCH API CRASH:",
       error
     );
 
@@ -2324,13 +1449,11 @@ export async function GET(
           "development"
             ? String(
                 error?.message ||
-                error
+                  error
               )
             : undefined,
       },
-      {
-        status: 500,
-      }
+      { status: 500 }
     );
   }
-}
+      }
