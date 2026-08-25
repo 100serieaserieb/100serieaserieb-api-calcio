@@ -12,6 +12,18 @@ const {
 
 const { DateTime } = require("luxon");
 
+function getRomeDateTime(date) {
+  if (!date) {
+    return null;
+  }
+
+  return DateTime
+    .fromISO(date, {
+      zone: "utc"
+    })
+    .setZone("Europe/Rome");
+}
+
 function formatEvent(event) {
   if (!event) {
     return null;
@@ -23,11 +35,19 @@ function formatEvent(event) {
     text: event.text || null,
     clock: event.clock?.displayValue || null,
     period: event.period?.displayValue || null,
+
     team: event.team?.displayName
       ? normalizeTeamName(event.team.displayName)
       : null,
+
     athlete: event.athletes?.[0]?.displayName || null
   };
+}
+
+function getCompetitor(competitors, side) {
+  return competitors.find(
+    competitor => competitor.homeAway === side
+  ) || null;
 }
 
 module.exports = async (req, res) => {
@@ -49,7 +69,9 @@ module.exports = async (req, res) => {
       });
     }
 
-    const competition = getCompetition(competitionId);
+    const competition = getCompetition(
+      competitionId
+    );
 
     if (!competition) {
       return res.status(404).json({
@@ -61,7 +83,8 @@ module.exports = async (req, res) => {
     if (!competition.espnLeague) {
       return res.status(400).json({
         success: false,
-        error: "Codice ESPN della competizione non configurato"
+        error:
+          "Codice ESPN della competizione non configurato"
       });
     }
 
@@ -78,28 +101,26 @@ module.exports = async (req, res) => {
     const competitors =
       competitionInfo?.competitors || [];
 
-    const home = competitors.find(
-      team => team.homeAway === "home"
+    const home = getCompetitor(
+      competitors,
+      "home"
     );
 
-    const away = competitors.find(
-      team => team.homeAway === "away"
+    const away = getCompetitor(
+      competitors,
+      "away"
     );
 
-    let dateTime = null;
+    const dateTime = getRomeDateTime(
+      header.date
+    );
 
-    if (header.date) {
-      dateTime = DateTime
-        .fromISO(header.date, {
-          zone: "utc"
-        })
-        .setZone("Europe/Rome");
-    }
-
-    const events = [
+    const rawEvents = [
       ...(summary.keyEvents || []),
       ...(summary.plays || [])
-    ]
+    ];
+
+    const events = rawEvents
       .map(formatEvent)
       .filter(Boolean);
 
@@ -131,7 +152,9 @@ module.exports = async (req, res) => {
           name: normalizeTeamName(
             home?.team?.displayName
           ),
+
           score: home?.score ?? "-",
+
           logo: home?.team?.logo || null
         },
 
@@ -139,7 +162,9 @@ module.exports = async (req, res) => {
           name: normalizeTeamName(
             away?.team?.displayName
           ),
+
           score: away?.score ?? "-",
+
           logo: away?.team?.logo || null
         },
 
