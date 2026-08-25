@@ -22,12 +22,14 @@ function first(...values) {
       return value;
     }
   }
-
   return null;
 }
 
 function str(value) {
-  if (value === undefined || value === null) {
+  if (
+    value === undefined ||
+    value === null
+  ) {
     return null;
   }
 
@@ -37,12 +39,17 @@ function str(value) {
 }
 
 function num(value) {
-  if (value === undefined || value === null) {
+  if (
+    value === undefined ||
+    value === null
+  ) {
     return null;
   }
 
   if (typeof value === "number") {
-    return Number.isFinite(value) ? value : null;
+    return Number.isFinite(value)
+      ? value
+      : null;
   }
 
   const match = String(value).match(
@@ -51,17 +58,21 @@ function num(value) {
 
   if (!match) return null;
 
-  const n = Number(
+  const result = Number(
     match[0].replace(",", ".")
   );
 
-  return Number.isFinite(n) ? n : null;
+  return Number.isFinite(result)
+    ? result
+    : null;
 }
 
 function unique(values) {
-  return [...new Set(
-    values.filter(Boolean)
-  )];
+  return [
+    ...new Set(
+      values.filter(Boolean)
+    ),
+  ];
 }
 
 function nameOf(value) {
@@ -85,7 +96,7 @@ function nameOf(value) {
 }
 
 /* =========================================================
-   ESPN FETCH
+   ESPN REQUEST
 ========================================================= */
 
 async function fetchESPN(url) {
@@ -94,11 +105,17 @@ async function fetchESPN(url) {
       headers: {
         Accept: "application/json",
         "User-Agent":
-          "Mozilla/5.0 100SerieASerieB/1.0",
+          "Mozilla/5.0 (compatible; 100SerieASerieB/1.0)",
       },
     });
 
     if (!response.ok) {
+      console.error(
+        "ESPN HTTP ERROR:",
+        response.status,
+        url
+      );
+
       return null;
     }
 
@@ -106,7 +123,6 @@ async function fetchESPN(url) {
   } catch (error) {
     console.error(
       "ESPN REQUEST ERROR:",
-      url,
       error?.message
     );
 
@@ -120,15 +136,20 @@ async function fetchESPN(url) {
 
 async function getScoreboard(
   league,
-  date = null
+  date
 ) {
   let url =
     `${ESPN_BASE}/${league}/scoreboard`;
 
   if (date) {
-    url += `?dates=${encodeURIComponent(
-      date.replaceAll("-", "")
-    )}`;
+    const cleanDate =
+      String(date)
+        .replace(/-/g, "");
+
+    url +=
+      `?dates=${encodeURIComponent(
+        cleanDate
+      )}`;
   }
 
   return fetchESPN(url);
@@ -207,14 +228,6 @@ function normalizeTeam(
     competitor.team ||
     competitor;
 
-  const logo =
-    first(
-      team.logo,
-      team.logos?.[0]?.href,
-      competitor.logo,
-      competitor.logos?.[0]?.href
-    );
-
   return {
     id: str(
       first(
@@ -232,7 +245,14 @@ function normalizeTeam(
       )
     ),
 
-    logo: str(logo),
+    logo: str(
+      first(
+        team.logo,
+        team.logos?.[0]?.href,
+        competitor.logo,
+        competitor.logos?.[0]?.href
+      )
+    ),
 
     score: num(
       first(
@@ -319,26 +339,29 @@ function normalizeStatus(
    LINEUPS
 ========================================================= */
 
-function getCompetitorPlayers(
-  competitor
+function getPlayersFromObject(
+  source
 ) {
-  const sources = [
-    competitor?.lineup?.players,
-    competitor?.roster?.players,
-    competitor?.roster,
-    competitor?.players,
+  if (!source) return [];
+
+  const candidates = [
+    source.lineup?.players,
+    source.lineup,
+    source.roster?.players,
+    source.roster,
+    source.players,
   ];
 
-  for (const source of sources) {
-    if (arr(source).length) {
-      return source;
+  for (const candidate of candidates) {
+    if (arr(candidate).length) {
+      return candidate;
     }
   }
 
   return [];
 }
 
-function playerFromObject(
+function normalizePlayer(
   player
 ) {
   if (!player) return null;
@@ -401,82 +424,85 @@ function playerFromObject(
     starter,
 
     substitute:
-      substitute || !starter,
+      substitute ||
+      (!starter && status !== ""),
   };
 }
 
 function normalizeLineup(
   competitor
 ) {
-  const players =
-    getCompetitorPlayers(
+  const rawPlayers =
+    getPlayersFromObject(
       competitor
     );
 
-  const normalized =
-    players
-      .map(playerFromObject)
+  const players =
+    rawPlayers
+      .map(normalizePlayer)
       .filter(Boolean);
 
   let starters =
-    normalized.filter(
-      player => player.starter
+    players.filter(
+      player =>
+        player.starter
     );
 
   let substitutes =
-    normalized.filter(
+    players.filter(
       player =>
         player.substitute &&
         !player.starter
     );
 
   /*
-   * Alcune risposte ESPN non valorizzano
-   * starter/substitute ma restituiscono
-   * comunque i giocatori.
+   * ESPN può restituire i giocatori
+   * senza indicare starter/bench.
+   *
+   * In quel caso prendiamo i primi 11
+   * come titolari e il resto come panchina.
    */
 
   if (
     starters.length === 0 &&
-    normalized.length > 0
+    players.length >= 11
   ) {
     starters =
-      normalized.slice(0, 11);
+      players.slice(0, 11);
 
     substitutes =
-      normalized.slice(11);
+      players.slice(11);
   }
 
-  const formation =
-    str(
+  return {
+    formation: str(
       first(
         competitor?.formation,
         competitor?.lineup?.formation,
         competitor?.roster?.formation
       )
-    );
-
-  return {
-    formation,
+    ),
 
     starters,
 
     substitutes,
 
-    players: normalized,
+    players,
   };
 }
 
 /* =========================================================
-   FIND LINEUP DATA INSIDE SUMMARY
+   FIND SUMMARY TEAM
 ========================================================= */
 
-function findSummaryCompetitor(
+function findTeamData(
   summary,
-  teamId
+  teamId,
+  homeAway
 ) {
-  const possibleSources = [
+  const sources = [
     summary?.boxscore?.teams,
+    summary?.boxscore?.players,
     summary?.rosters,
     summary?.roster,
     summary?.lineups,
@@ -484,7 +510,7 @@ function findSummaryCompetitor(
       ?.competitors,
   ];
 
-  for (const source of possibleSources) {
+  for (const source of sources) {
     for (const item of arr(source)) {
       const itemTeam =
         item.team ||
@@ -501,8 +527,16 @@ function findSummaryCompetitor(
 
       if (
         teamId &&
+        id &&
         String(id) ===
-        String(teamId)
+          String(teamId)
+      ) {
+        return item;
+      }
+
+      if (
+        homeAway &&
+        item.homeAway === homeAway
       ) {
         return item;
       }
@@ -537,7 +571,8 @@ function findStatistic(
           statistic.name,
           statistic.label,
           statistic.abbreviation,
-          statistic.type
+          statistic.type,
+          statistic.displayName
         ) || ""
       )
         .toLowerCase()
@@ -563,19 +598,35 @@ function findStatistic(
 function getTeamStatistics(
   team
 ) {
+  if (!team) {
+    return {
+      team: null,
+      shots: null,
+      shotsOnTarget: null,
+      possession: null,
+      corners: null,
+      offsides: null,
+      fouls: null,
+      yellowCards: null,
+      redCards: null,
+      saves: null,
+    };
+  }
+
   const statistics = [
-    ...arr(team?.statistics),
-    ...arr(team?.team?.statistics),
+    ...arr(team.statistics),
+    ...arr(team.team?.statistics),
   ];
 
   return {
-    team: nameOf(
-      first(
-        team?.team,
-        team?.competitor,
-        team
-      )
-    ),
+    team:
+      nameOf(
+        first(
+          team.team,
+          team.competitor,
+          team
+        )
+      ),
 
     shots: num(
       findStatistic(
@@ -595,6 +646,7 @@ function getTeamStatistics(
           "shots on target",
           "shots on goal",
           "shotsontarget",
+          "on target",
           "tiri in porta",
         ]
       )
@@ -627,6 +679,7 @@ function getTeamStatistics(
         statistics,
         [
           "offsides",
+          "offside",
           "fuorigioco",
         ]
       )
@@ -637,6 +690,7 @@ function getTeamStatistics(
         statistics,
         [
           "fouls",
+          "foul",
           "falli",
         ]
       )
@@ -648,6 +702,7 @@ function getTeamStatistics(
         [
           "yellow cards",
           "yellow",
+          "yellowcard",
           "cartellini gialli",
         ]
       )
@@ -659,6 +714,7 @@ function getTeamStatistics(
         [
           "red cards",
           "red",
+          "redcard",
           "cartellini rossi",
         ]
       )
@@ -670,6 +726,7 @@ function getTeamStatistics(
         [
           "saves",
           "goalkeeper saves",
+          "saves by goalkeeper",
           "parades",
         ]
       )
@@ -678,29 +735,25 @@ function getTeamStatistics(
 }
 
 /* =========================================================
-   BOX SCORE STATISTICS
-========================================================= */
-
-function getBoxscoreTeam(
-  summary,
-  homeAway
-) {
-  const teams =
-    arr(
-      summary?.boxscore?.teams
-    );
-
-  return (
-    teams.find(
-      team =>
-        team.homeAway === homeAway
-    ) || null
-  );
-}
-
-/* =========================================================
    EVENTS
 ========================================================= */
+
+function getPlays(summary) {
+  const sources = [
+    summary?.plays,
+    summary?.keyEvents,
+    summary?.events,
+    summary?.commentary?.plays,
+  ];
+
+  for (const source of sources) {
+    if (arr(source).length) {
+      return source;
+    }
+  }
+
+  return [];
+}
 
 function normalizeEvent(
   play
@@ -728,17 +781,25 @@ function normalizeEvent(
     rawType.includes("yellow") ||
     rawType.includes("giallo")
   ) {
-    type = "cartellino_giallo";
+    type =
+      "cartellino_giallo";
   } else if (
     rawType.includes("red") ||
     rawType.includes("rosso")
   ) {
-    type = "cartellino_rosso";
+    type =
+      "cartellino_rosso";
   } else if (
     rawType.includes("substitution") ||
     rawType.includes("sostituzione")
   ) {
-    type = "sostituzione";
+    type =
+      "sostituzione";
+  } else if (
+    rawType.includes("penalty") ||
+    rawType.includes("rigore")
+  ) {
+    type = "rigore";
   } else if (
     rawType.includes("kickoff") ||
     rawType.includes("start") ||
@@ -757,14 +818,16 @@ function normalizeEvent(
     type = "fine";
   } else if (
     rawType.includes("injury") ||
-    rawType.includes("interruption") ||
-    rawType.includes("interruzione")
+    rawType.includes("interruption")
   ) {
-    type = "interruzione";
+    type =
+      "interruzione";
   }
 
   const competition =
-    arr(play.competitions)[0];
+    arr(
+      play.competitions
+    )[0];
 
   const competitor =
     play.competitor ||
@@ -802,7 +865,8 @@ function normalizeEvent(
             participant.role === "in"
         );
 
-      playerIn = p?.athlete || p;
+      playerIn =
+        p?.athlete || p;
     }
 
     if (!playerOut) {
@@ -813,7 +877,8 @@ function normalizeEvent(
             participant.role === "out"
         );
 
-      playerOut = p?.athlete || p;
+      playerOut =
+        p?.athlete || p;
     }
   }
 
@@ -837,24 +902,22 @@ function normalizeEvent(
       )
     ),
 
-    player: nameOf(
-      athlete
-    ),
+    player:
+      nameOf(athlete),
 
-    assist: nameOf(
-      first(
-        play.assist,
-        play.assist?.athlete
-      )
-    ),
+    assist:
+      nameOf(
+        first(
+          play.assist,
+          play.assist?.athlete
+        )
+      ),
 
-    playerIn: nameOf(
-      playerIn
-    ),
+    playerIn:
+      nameOf(playerIn),
 
-    playerOut: nameOf(
-      playerOut
-    ),
+    playerOut:
+      nameOf(playerOut),
 
     text: str(
       first(
@@ -863,30 +926,6 @@ function normalizeEvent(
       )
     ),
   };
-}
-
-/* =========================================================
-   PLAYS
-========================================================= */
-
-function getPlays(
-  summary
-) {
-  const possible =
-    [
-      summary?.plays,
-      summary?.keyEvents,
-      summary?.events,
-      summary?.commentary?.plays,
-    ];
-
-  for (const source of possible) {
-    if (arr(source).length) {
-      return source;
-    }
-  }
-
-  return [];
 }
 
 /* =========================================================
@@ -973,9 +1012,8 @@ function getPenalties(
           )
         ),
 
-        result: str(
-          play.text
-        ),
+        result:
+          str(play.text),
 
         scored:
           text.includes("scored") ||
@@ -1033,9 +1071,8 @@ function getVenue(
       )
     ),
 
-    capacity: num(
-      venue.capacity
-    ),
+    capacity:
+      num(venue.capacity),
 
     address: str(
       first(
@@ -1054,35 +1091,254 @@ function getTV(
   summary,
   competition
 ) {
-  const channels = [];
+  const result = [];
 
   const sources = [
     ...arr(summary?.broadcasts),
+    ...arr(summary?.broadcast),
+    ...arr(
+      summary?.header?.broadcasts
+    ),
     ...arr(
       competition?.broadcasts
     ),
   ];
 
   for (const broadcast of sources) {
-    [
+    const values = [
       broadcast?.name,
       broadcast?.shortName,
       broadcast?.market,
       broadcast?.media?.name,
       broadcast?.media?.shortName,
-    ].forEach(value => {
-      const valueClean =
+    ];
+
+    for (const value of values) {
+      const clean =
         str(value);
 
-      if (valueClean) {
-        channels.push(
-          valueClean
-        );
+      if (clean) {
+        result.push(clean);
       }
-    });
+    }
   }
 
-  return unique(channels);
+  return unique(result);
+}
+
+/* =========================================================
+   OFFICIALS
+========================================================= */
+
+function getOfficials(
+  summary
+) {
+  const officials = [
+    ...arr(summary?.officials),
+    ...arr(
+      summary?.competition
+        ?.officials
+    ),
+    ...arr(
+      summary?.header
+        ?.competitions?.[0]
+        ?.officials
+    ),
+  ];
+
+  const result = {
+    referee: null,
+    assistantReferee1: null,
+    assistantReferee2: null,
+    fourthOfficial: null,
+    var: null,
+    avar: null,
+  };
+
+  const names = [];
+
+  for (const official of officials) {
+    const name =
+      nameOf(
+        first(
+          official.athlete,
+          official.displayName,
+          official.fullName,
+          official.name
+        )
+      );
+
+    if (!name) continue;
+
+    names.push(name);
+
+    const role =
+      String(
+        first(
+          official.type?.text,
+          official.type?.name,
+          official.position,
+          official.role,
+          ""
+        ) || ""
+      ).toLowerCase();
+
+    if (
+      role.includes("avar") ||
+      role.includes("video assistant")
+    ) {
+      if (!result.avar) {
+        result.avar = name;
+      }
+    } else if (
+      role.includes("var")
+    ) {
+      if (!result.var) {
+        result.var = name;
+      }
+    } else if (
+      role.includes("fourth") ||
+      role.includes("4th")
+    ) {
+      if (
+        !result.fourthOfficial
+      ) {
+        result.fourthOfficial =
+          name;
+      }
+    } else if (
+      role.includes("assistant") ||
+      role.includes("linesman")
+    ) {
+      if (
+        !result.assistantReferee1
+      ) {
+        result.assistantReferee1 =
+          name;
+      } else if (
+        !result.assistantReferee2
+      ) {
+        result.assistantReferee2 =
+          name;
+      }
+    } else if (
+      role.includes("referee") ||
+      role.includes("arbitro")
+    ) {
+      if (!result.referee) {
+        result.referee = name;
+      }
+    }
+  }
+
+  /*
+   * Fallback se ESPN non specifica
+   * il ruolo dell'ufficiale.
+   */
+
+  const uniqueNames =
+    unique(names);
+
+  if (
+    !result.referee &&
+    uniqueNames[0]
+  ) {
+    result.referee =
+      uniqueNames[0];
+  }
+
+  if (
+    !result.assistantReferee1 &&
+    uniqueNames[1]
+  ) {
+    result.assistantReferee1 =
+      uniqueNames[1];
+  }
+
+  if (
+    !result.assistantReferee2 &&
+    uniqueNames[2]
+  ) {
+    result.assistantReferee2 =
+      uniqueNames[2];
+  }
+
+  if (
+    !result.fourthOfficial &&
+    uniqueNames[3]
+  ) {
+    result.fourthOfficial =
+      uniqueNames[3];
+  }
+
+  if (
+    !result.var &&
+    uniqueNames[4]
+  ) {
+    result.var =
+      uniqueNames[4];
+  }
+
+  if (
+    !result.avar &&
+    uniqueNames[5]
+  ) {
+    result.avar =
+      uniqueNames[5];
+  }
+
+  return result;
+}
+
+/* =========================================================
+   MVP
+========================================================= */
+
+function getMVP(
+  summary
+) {
+  const candidates = [
+    summary?.playerOfTheMatch,
+    summary?.mvp,
+    summary?.gameInfo?.mvp,
+    summary?.leaders?.[0],
+  ];
+
+  for (const candidate of candidates) {
+    if (!candidate) continue;
+
+    const athlete =
+      candidate.athlete ||
+      candidate.player ||
+      candidate;
+
+    const name =
+      nameOf(athlete);
+
+    if (!name) continue;
+
+    return {
+      name,
+
+      team:
+        nameOf(
+          first(
+            candidate.team,
+            athlete.team
+          )
+        ),
+
+      reason:
+        str(
+          first(
+            candidate.reason,
+            candidate.description
+          )
+        ),
+    };
+  }
+
+  return null;
 }
 
 /* =========================================================
@@ -1090,32 +1346,32 @@ function getTV(
 ========================================================= */
 
 function formatDateTime(
-  date
+  value
 ) {
-  if (!date) {
+  if (!value) {
     return {
       date: null,
       time: null,
     };
   }
 
-  const d =
-    new Date(date);
+  const date =
+    new Date(value);
 
   if (
     Number.isNaN(
-      d.getTime()
+      date.getTime()
     )
   ) {
     return {
-      date: str(date),
+      date: str(value),
       time: null,
     };
   }
 
   return {
     date:
-      d.toLocaleDateString(
+      date.toLocaleDateString(
         "it-IT",
         {
           timeZone:
@@ -1127,7 +1383,7 @@ function formatDateTime(
       ),
 
     time:
-      d.toLocaleTimeString(
+      date.toLocaleTimeString(
         "it-IT",
         {
           timeZone:
@@ -1140,480 +1396,543 @@ function formatDateTime(
 }
 
 /* =========================================================
-   MAIN API
+   MAIN
 ========================================================= */
 
-module.exports = async function handler(
-  req,
-  res
-) {
-  try {
-    const query =
-      req.query || {};
+module.exports =
+  async function handler(
+    req,
+    res
+  ) {
+    try {
+      const query =
+        req.query || {};
 
-    const league =
-      query.league ||
-      query.competition ||
-      DEFAULT_LEAGUE;
+      const league =
+        query.league ||
+        (
+          query.competition ===
+          "serie-a"
+            ? "ita.1"
+            : query.competition
+        ) ||
+        DEFAULT_LEAGUE;
 
-    const eventId =
-      query.id ||
-      query.event ||
-      query.matchId;
+      const eventId =
+        query.id ||
+        query.event ||
+        query.matchId;
 
-    const search =
-      query.q ||
-      query.search;
+      const search =
+        query.q ||
+        query.search;
 
-    const date =
-      query.date;
+      const date =
+        query.date;
 
-    /*
-     * -----------------------------------------------------
-     * EVENT ID
-     * -----------------------------------------------------
-     */
+      if (!eventId && !search) {
+        res.status(400).json({
+          success: false,
+          source: "ESPN",
+          error:
+            "Inserisci id, event, matchId oppure q/search.",
+        });
 
-    let event = null;
+        return;
+      }
 
-    if (eventId) {
-      const scoreboard =
+      /* -----------------------------------------------------
+         1. SCOREBOARD
+      ----------------------------------------------------- */
+
+      let scoreboard =
         await getScoreboard(
           league,
           date
         );
 
-      event =
-        findEvent(
+      /*
+       * Se la ricerca per ID non trova
+       * la partita nel giorno specificato,
+       * riproviamo senza data.
+       */
+
+      if (
+        eventId &&
+        !findEvent(
           scoreboard,
           eventId
-        );
-    }
+        ) &&
+        date
+      ) {
+        scoreboard =
+          await getScoreboard(
+            league
+          );
+      }
 
-    /*
-     * -----------------------------------------------------
-     * SEARCH
-     * -----------------------------------------------------
-     */
+      let event =
+        eventId
+          ? findEvent(
+              scoreboard,
+              eventId
+            )
+          : null;
 
-    if (!event && search) {
-      const scoreboard =
-        await getScoreboard(
-          league,
-          date
-        );
+      /* -----------------------------------------------------
+         2. SEARCH
+      ----------------------------------------------------- */
 
-      const events =
-        arr(
-          scoreboard?.events
-        );
+      if (!event && search) {
+        const events =
+          arr(
+            scoreboard?.events
+          );
 
-      const q =
-        String(search)
-          .toLowerCase()
-          .trim();
+        const q =
+          String(search)
+            .toLowerCase()
+            .trim();
 
-      event =
-        events.find(
-          currentEvent => {
-            const competitors =
-              arr(
-                currentEvent
-                  ?.competitions?.[0]
-                  ?.competitors
+        event =
+          events.find(
+            currentEvent => {
+              const teams =
+                arr(
+                  currentEvent
+                    ?.competitions?.[0]
+                    ?.competitors
+                );
+
+              return teams.some(
+                competitor => {
+                  const team =
+                    competitor.team ||
+                    competitor;
+
+                  const teamName =
+                    String(
+                      first(
+                        team.displayName,
+                        team.name,
+                        team.shortDisplayName
+                      ) || ""
+                    ).toLowerCase();
+
+                  return (
+                    teamName.includes(q)
+                  );
+                }
               );
+            }
+          ) || null;
+      }
 
-            return competitors.some(
-              competitor => {
-                const team =
-                  competitor.team ||
-                  competitor;
+      /*
+       * IMPORTANTE:
+       * se ESPN scoreboard non restituisce
+       * l'evento, proviamo comunque summary
+       * usando direttamente l'ID.
+       */
 
-                const teamName =
-                  String(
-                    first(
-                      team.displayName,
-                      team.name,
-                      team.shortDisplayName
-                    ) || ""
-                  ).toLowerCase();
+      let actualEventId =
+        event
+          ? String(event.id)
+          : eventId
+          ? String(eventId)
+          : null;
 
-                return teamName.includes(q);
-              }
-            );
-          }
-        ) || null;
-    }
+      if (!actualEventId) {
+        res.status(404).json({
+          success: false,
+          source: "ESPN",
+          error:
+            "Partita non trovata",
+          query:
+            search || null,
+          eventId:
+            eventId || null,
+        });
 
-    /*
-     * -----------------------------------------------------
-     * IF NOT FOUND
-     * -----------------------------------------------------
-     */
+        return;
+      }
 
-    if (!event) {
-      res.status(404).json({
-        success: false,
-        source: "ESPN",
-        error:
-          "Partita non trovata",
-        query:
-          search || null,
-        eventId:
-          eventId || null,
-      });
+      /* -----------------------------------------------------
+         3. SUMMARY
+      ----------------------------------------------------- */
 
-      return;
-    }
+      let summary =
+        await getSummary(
+          league,
+          actualEventId
+        );
 
-    const actualEventId =
-      String(event.id);
+      /*
+       * Se il summary non risponde ma abbiamo
+       * l'evento nello scoreboard, utilizziamo
+       * comunque i dati scoreboard.
+       */
 
-    /*
-     * -----------------------------------------------------
-     * SUMMARY
-     * -----------------------------------------------------
-     */
+      if (!event) {
+        event =
+          findEvent(
+            scoreboard,
+            actualEventId
+          );
+      }
 
-    const summary =
-      await getSummary(
-        league,
-        actualEventId
-      );
+      /*
+       * -----------------------------------------------------
+       * 4. COMPETITION
+       * -----------------------------------------------------
+       */
 
-    /*
-     * -----------------------------------------------------
-     * COMPETITION
-     * -----------------------------------------------------
-     */
+      const competition =
+        getCompetition(
+          event,
+          summary
+        );
 
-    const competition =
-      getCompetition(
-        event,
-        summary
-      );
+      if (!competition) {
+        res.status(404).json({
+          success: false,
+          source: "ESPN",
+          error:
+            "Dati della competizione non disponibili.",
+          eventId:
+            actualEventId,
+        });
 
-    const competitors =
-      arr(
-        competition?.competitors
-      );
+        return;
+      }
 
-    const homeRaw =
-      competitors.find(
-        c =>
-          c.homeAway === "home"
-      ) ||
-      competitors[0];
+      /* -----------------------------------------------------
+         5. TEAMS
+      ----------------------------------------------------- */
 
-    const awayRaw =
-      competitors.find(
-        c =>
-          c.homeAway === "away"
-      ) ||
-      competitors[1];
+      const competitors =
+        arr(
+          competition.competitors
+        );
 
-    const home =
-      normalizeTeam(
-        homeRaw
-      );
+      const homeRaw =
+        competitors.find(
+          item =>
+            item.homeAway ===
+            "home"
+        ) ||
+        competitors[0] ||
+        null;
 
-    const away =
-      normalizeTeam(
-        awayRaw
-      );
+      const awayRaw =
+        competitors.find(
+          item =>
+            item.homeAway ===
+            "away"
+        ) ||
+        competitors[1] ||
+        null;
 
-    /*
-     * -----------------------------------------------------
-     * SUMMARY COMPETITORS
-     * -----------------------------------------------------
-     */
+      const home =
+        normalizeTeam(
+          homeRaw
+        );
 
-    const homeSummary =
-      findSummaryCompetitor(
-        summary,
-        home.id
-      );
+      const away =
+        normalizeTeam(
+          awayRaw
+        );
 
-    const awaySummary =
-      findSummaryCompetitor(
-        summary,
-        away.id
-      );
+      /* -----------------------------------------------------
+         6. SUMMARY TEAM DATA
+      ----------------------------------------------------- */
 
-    /*
-     * -----------------------------------------------------
-     * LINEUPS
-     * -----------------------------------------------------
-     */
+      const homeSummary =
+        findTeamData(
+          summary,
+          home.id,
+          "home"
+        );
 
-    const homeLineup =
-      normalizeLineup(
-        homeSummary ||
-        homeRaw
-      );
+      const awaySummary =
+        findTeamData(
+          summary,
+          away.id,
+          "away"
+        );
 
-    const awayLineup =
-      normalizeLineup(
-        awaySummary ||
-        awayRaw
-      );
+      /* -----------------------------------------------------
+         7. LINEUPS
+      ----------------------------------------------------- */
 
-    /*
-     * -----------------------------------------------------
-     * STATISTICS
-     * -----------------------------------------------------
-     */
+      const homeLineup =
+        normalizeLineup(
+          homeSummary ||
+          homeRaw
+        );
 
-    const homeBox =
-      getBoxscoreTeam(
-        summary,
-        "home"
-      );
+      const awayLineup =
+        normalizeLineup(
+          awaySummary ||
+          awayRaw
+        );
 
-    const awayBox =
-      getBoxscoreTeam(
-        summary,
-        "away"
-      );
+      /* -----------------------------------------------------
+         8. STATISTICS
+      ----------------------------------------------------- */
 
-    let homeStats =
-      getTeamStatistics(
-        homeBox
-      );
-
-    let awayStats =
-      getTeamStatistics(
-        awayBox
-      );
-
-    /*
-     * Fallback summary competitors
-     */
-
-    if (
-      !homeStats.shots &&
-      homeSummary
-    ) {
-      homeStats =
+      let homeStats =
         getTeamStatistics(
           homeSummary
         );
-    }
 
-    if (
-      !awayStats.shots &&
-      awaySummary
-    ) {
-      awayStats =
+      let awayStats =
         getTeamStatistics(
           awaySummary
         );
-    }
 
-    homeStats.team =
-      home.name;
+      /*
+       * Fallback boxscore.
+       */
 
-    awayStats.team =
-      away.name;
+      if (
+        !homeStats.shots &&
+        summary?.boxscore?.teams
+      ) {
+        const box =
+          arr(
+            summary.boxscore.teams
+          ).find(
+            item =>
+              item.homeAway ===
+              "home"
+          );
 
-    /*
-     * -----------------------------------------------------
-     * EVENTS
-     * -----------------------------------------------------
-     */
+        homeStats =
+          getTeamStatistics(
+            box
+          );
+      }
 
-    const rawPlays =
-      getPlays(summary);
+      if (
+        !awayStats.shots &&
+        summary?.boxscore?.teams
+      ) {
+        const box =
+          arr(
+            summary.boxscore.teams
+          ).find(
+            item =>
+              item.homeAway ===
+              "away"
+          );
 
-    const events =
-      rawPlays
-        .map(
-          normalizeEvent
-        )
-        .filter(Boolean);
+        awayStats =
+          getTeamStatistics(
+            box
+          );
+      }
 
-    /*
-     * -----------------------------------------------------
-     * PENALTIES
-     * -----------------------------------------------------
-     */
+      homeStats.team =
+        home.name;
 
-    const penalties =
-      getPenalties(
-        summary,
+      awayStats.team =
+        away.name;
+
+      /* -----------------------------------------------------
+         9. EVENTS
+      ----------------------------------------------------- */
+
+      const rawPlays =
+        getPlays(
+          summary
+        );
+
+      const events =
         rawPlays
-      );
-
-    /*
-     * -----------------------------------------------------
-     * DATE
-     * -----------------------------------------------------
-     */
-
-    const dateTime =
-      formatDateTime(
-        first(
-          competition?.date,
-          event?.date
-        )
-      );
-
-    /*
-     * -----------------------------------------------------
-     * RESPONSE
-     * -----------------------------------------------------
-     */
-
-    const response = {
-      success: true,
-
-      source: "ESPN",
-
-      timezone:
-        TIMEZONE,
-
-      competition: {
-        id: str(
-          first(
-            competition?.league?.id,
-            event?.league?.id,
-            league
+          .map(
+            normalizeEvent
           )
-        ),
+          .filter(Boolean);
 
-        name: str(
+      /* -----------------------------------------------------
+         10. PENALTIES
+      ----------------------------------------------------- */
+
+      const penalties =
+        getPenalties(
+          summary,
+          rawPlays
+        );
+
+      /* -----------------------------------------------------
+         11. DATE
+      ----------------------------------------------------- */
+
+      const dateTime =
+        formatDateTime(
           first(
-            competition?.league?.name,
-            event?.league?.name,
-            "Italian Serie A"
+            competition.date,
+            event?.date,
+            summary?.header
+              ?.competitions?.[0]
+              ?.date
           )
-        ),
+        );
 
-        espnLeague:
-          league,
+      /* -----------------------------------------------------
+         12. RESPONSE
+      ----------------------------------------------------- */
 
-        season: str(
-          first(
-            competition?.season?.year,
-            event?.season?.year
-          )
-        ),
-      },
+      const response = {
+        success: true,
 
-      match: {
-        id:
-          actualEventId,
+        source: "ESPN",
 
-        date:
-          dateTime.date,
+        timezone:
+          TIMEZONE,
 
-        time:
-          dateTime.time,
+        competition: {
+          id: str(
+            first(
+              competition?.league?.id,
+              event?.league?.id,
+              league
+            )
+          ),
 
-        home: {
-          ...home,
+          name: str(
+            first(
+              competition?.league?.name,
+              event?.league?.name,
+              "Italian Serie A"
+            )
+          ),
 
-          score:
-            home.score ??
-            num(
-              homeRaw?.score
+          espnLeague:
+            league,
+
+          season: str(
+            first(
+              competition?.season?.year,
+              event?.season?.year,
+              summary?.header
+                ?.season?.year
+            )
+          ),
+        },
+
+        match: {
+          id:
+            actualEventId,
+
+          date:
+            dateTime.date,
+
+          time:
+            dateTime.time,
+
+          home: {
+            ...home,
+
+            score:
+              home.score ??
+              num(
+                homeRaw?.score
+              ),
+          },
+
+          away: {
+            ...away,
+
+            score:
+              away.score ??
+              num(
+                awayRaw?.score
+              ),
+          },
+
+          status:
+            normalizeStatus(
+              competition,
+              event
             ),
         },
 
-        away: {
-          ...away,
+        lineups: {
+          home:
+            homeLineup,
 
-          score:
-            away.score ??
-            num(
-              awayRaw?.score
-            ),
+          away:
+            awayLineup,
         },
 
-        status:
-          normalizeStatus(
+        statistics: {
+          home:
+            homeStats,
+
+          away:
+            awayStats,
+        },
+
+        penalties,
+
+        venue:
+          getVenue(
             competition,
             event
           ),
-      },
 
-      lineups: {
-        home:
-          homeLineup,
+        officials:
+          getOfficials(
+            summary
+          ),
 
-        away:
-          awayLineup,
-      },
+        tv:
+          getTV(
+            summary,
+            competition
+          ),
 
-      statistics: {
-        home:
-          homeStats,
+        mvp:
+          getMVP(
+            summary
+          ),
 
-        away:
-          awayStats,
-      },
+        events,
+      };
 
-      penalties,
+      /* -----------------------------------------------------
+         13. CACHE
+      ----------------------------------------------------- */
 
-      venue:
-        getVenue(
-          competition,
-          event
-        ),
+      res.setHeader(
+        "Cache-Control",
+        "s-maxage=15, stale-while-revalidate=30"
+      );
 
-      officials: {
-        referee: null,
-        assistantReferee1: null,
-        assistantReferee2: null,
-        fourthOfficial: null,
-        var: null,
-        avar: null,
-      },
+      res.status(200).json(
+        response
+      );
+    } catch (error) {
+      console.error(
+        "MATCH API ERROR:",
+        error
+      );
 
-      tv:
-        getTV(
-          summary,
-          competition
-        ),
-
-      mvp: null,
-
-      events,
-    };
-
-    /*
-     * -----------------------------------------------------
-     * CACHE
-     * -----------------------------------------------------
-     */
-
-    res.setHeader(
-      "Cache-Control",
-      "s-maxage=15, stale-while-revalidate=30"
-    );
-
-    res.status(200).json(
-      response
-    );
-  } catch (error) {
-    console.error(
-      "MATCH API ERROR:",
-      error
-    );
-
-    res.status(500).json({
-      success: false,
-      source: "ESPN",
-      error:
-        "Errore interno durante il recupero della partita.",
-      message:
-        error?.message ||
-        String(error),
-      eventId:
-        req.query?.id ||
-        req.query?.event ||
-        req.query?.matchId ||
-        null,
-    });
-  }
-};
+      res.status(500).json({
+        success: false,
+        source: "ESPN",
+        error:
+          "Errore interno durante il recupero della partita.",
+        message:
+          error?.message ||
+          String(error),
+        eventId:
+          req.query?.id ||
+          req.query?.event ||
+          req.query?.matchId ||
+          null,
+      });
+    }
+  };
