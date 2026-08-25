@@ -3,6 +3,12 @@ const { getMatchSummary } = require("../lib/espn");
 const { normalizeTeamName } = require("../lib/teams");
 const { DateTime } = require("luxon");
 
+/*
+ * ==========================================
+ * DATA / ORA
+ * ==========================================
+ */
+
 function getRomeDateTime(date) {
   if (!date) return null;
 
@@ -15,6 +21,12 @@ function getRomeDateTime(date) {
   return parsed.setZone("Europe/Rome");
 }
 
+/*
+ * ==========================================
+ * COMPETITOR
+ * ==========================================
+ */
+
 function getCompetitor(competitors, side) {
   if (!Array.isArray(competitors)) {
     return null;
@@ -26,6 +38,201 @@ function getCompetitor(competitors, side) {
     ) || null
   );
 }
+
+/*
+ * ==========================================
+ * TRADUZIONE TESTI ESPN
+ * ==========================================
+ */
+
+function translateEventType(type) {
+  if (!type) return null;
+
+  const value = String(type).toLowerCase();
+
+  if (value.includes("goal")) {
+    return "Gol";
+  }
+
+  if (value.includes("yellow")) {
+    return "Cartellino giallo";
+  }
+
+  if (value.includes("red")) {
+    return "Cartellino rosso";
+  }
+
+  if (value.includes("substitution")) {
+    return "Sostituzione";
+  }
+
+  if (value.includes("kickoff")) {
+    return "Inizio primo tempo";
+  }
+
+  if (value.includes("start 2nd")) {
+    return "Inizio secondo tempo";
+  }
+
+  if (value.includes("halftime")) {
+    return "Fine primo tempo";
+  }
+
+  if (value.includes("end regular")) {
+    return "Fine partita";
+  }
+
+  if (value.includes("start delay")) {
+    return "Interruzione";
+  }
+
+  if (value.includes("end delay")) {
+    return "Ripresa del gioco";
+  }
+
+  return type;
+}
+
+function translateStatusState(state) {
+  switch (state) {
+    case "pre":
+      return "programmata";
+
+    case "in":
+      return "in corso";
+
+    case "post":
+      return "terminata";
+
+    default:
+      return state || null;
+  }
+}
+
+function translateStatusName(name) {
+  switch (name) {
+    case "STATUS_SCHEDULED":
+      return "Partita programmata";
+
+    case "STATUS_FULL_TIME":
+      return "Partita terminata";
+
+    case "STATUS_IN_PROGRESS":
+      return "Partita in corso";
+
+    case "STATUS_HALFTIME":
+      return "Intervallo";
+
+    case "STATUS_POSTPONED":
+      return "Partita rinviata";
+
+    case "STATUS_CANCELED":
+      return "Partita annullata";
+
+    default:
+      return name || null;
+  }
+}
+
+function translateStatusDescription(description) {
+  switch (description) {
+    case "Scheduled":
+      return "Programmato";
+
+    case "Full Time":
+      return "Fine partita";
+
+    case "In Progress":
+      return "In corso";
+
+    case "Halftime":
+      return "Intervallo";
+
+    case "Postponed":
+      return "Rinviata";
+
+    case "Canceled":
+      return "Annullata";
+
+    default:
+      return description || null;
+  }
+}
+
+function translateStatusDetail(detail) {
+  if (!detail) return null;
+
+  if (
+    detail.startsWith("Fri,")
+  ) {
+    return "Venerdì alle " +
+      extractTime(detail);
+  }
+
+  if (
+    detail.startsWith("Sat,")
+  ) {
+    return "Sabato alle " +
+      extractTime(detail);
+  }
+
+  if (
+    detail.startsWith("Sun,")
+  ) {
+    return "Domenica alle " +
+      extractTime(detail);
+  }
+
+  if (
+    detail.startsWith("Mon,")
+  ) {
+    return "Lunedì alle " +
+      extractTime(detail);
+  }
+
+  if (
+    detail.startsWith("Tue,")
+  ) {
+    return "Martedì alle " +
+      extractTime(detail);
+  }
+
+  if (
+    detail.startsWith("Wed,")
+  ) {
+    return "Mercoledì alle " +
+      extractTime(detail);
+  }
+
+  if (
+    detail.startsWith("Thu,")
+  ) {
+    return "Giovedì alle " +
+      extractTime(detail);
+  }
+
+  if (detail === "FT") {
+    return "Fine partita";
+  }
+
+  return detail;
+}
+
+function extractTime(detail) {
+  const match = detail.match(
+    /at\s+(\d{1,2}:\d{2})/
+  );
+
+  return match
+    ? match[1]
+    : detail;
+}
+
+/*
+ * ==========================================
+ * EVENTI
+ * ==========================================
+ */
 
 function getEventType(event) {
   if (!event) return "";
@@ -79,16 +286,14 @@ function getEventText(event) {
   return "";
 }
 
+/*
+ * ==========================================
+ * PLAYER / ASSIST
+ * ==========================================
+ */
+
 function getPlayerFromText(text) {
   if (!text) return null;
-
-  /*
-   * GOL
-   *
-   * Esempio:
-   * Goal! Udinese 1, Como 0.
-   * Hassane Kamara (Udinese) ...
-   */
 
   if (text.startsWith("Goal!")) {
     const goalMatch = text.match(
@@ -99,13 +304,6 @@ function getPlayerFromText(text) {
       return goalMatch[1].trim();
     }
   }
-
-  /*
-   * CARTELLINI
-   *
-   * Esempio:
-   * Jakub Piotrowski (Udinese) ...
-   */
 
   const match = text.match(
     /^([^(]+)\s*\(/
@@ -132,6 +330,116 @@ function getAssistFromText(text) {
   return match[1].trim();
 }
 
+/*
+ * ==========================================
+ * TESTO EVENTO IN ITALIANO
+ * ==========================================
+ */
+
+function buildItalianEventText(
+  event,
+  team,
+  player,
+  assist
+) {
+  const type = getEventType(event);
+  const lowerType =
+    type.toLowerCase();
+
+  const minute =
+    getEventMinute(event);
+
+  const minuteText =
+    minute
+      ? `Al ${minute}`
+      : "";
+
+  if (lowerType.includes("goal")) {
+    if (assist) {
+      return `${minuteText}: gol di ${player} per ${team}, assist di ${assist}.`
+        .trim();
+    }
+
+    return `${minuteText}: gol di ${player} per ${team}.`
+      .trim();
+  }
+
+  if (lowerType.includes("yellow")) {
+    return `${minuteText}: cartellino giallo per ${player} (${team}).`
+      .trim();
+  }
+
+  if (lowerType.includes("red")) {
+    return `${minuteText}: cartellino rosso per ${player} (${team}).`
+      .trim();
+  }
+
+  if (lowerType.includes("substitution")) {
+    const originalText =
+      getEventText(event);
+
+    const substitutionMatch =
+      originalText.match(
+        /Substitution,\s*[^.]+\.\s*(.+?) replaces (.+?)(?:\.| because|$)/i
+      );
+
+    if (substitutionMatch) {
+      const incoming =
+        substitutionMatch[1].trim();
+
+      const outgoing =
+        substitutionMatch[2].trim();
+
+      return `${minuteText}: ${incoming} entra al posto di ${outgoing} per ${team}.`
+        .trim();
+    }
+
+    return `${minuteText}: sostituzione per ${team}.`
+      .trim();
+  }
+
+  if (lowerType.includes("kickoff")) {
+    return "Inizio del primo tempo.";
+  }
+
+  if (lowerType.includes("start 2nd")) {
+    return "Inizio del secondo tempo.";
+  }
+
+  if (lowerType.includes("halftime")) {
+    return "Fine del primo tempo.";
+  }
+
+  if (lowerType.includes("end regular")) {
+    return "Fine della partita.";
+  }
+
+  if (lowerType.includes("start delay")) {
+    const originalText =
+      getEventText(event);
+
+    const injuryMatch =
+      originalText.match(
+        /because of an injury\s+(.+?)\s+\((.+?)\)/i
+      );
+
+    if (injuryMatch) {
+      return `${minuteText}: gioco interrotto per un infortunio a ${injuryMatch[1]} (${injuryMatch[2]}).`
+        .trim();
+    }
+
+    return `${minuteText}: gioco momentaneamente interrotto.`
+      .trim();
+  }
+
+  if (lowerType.includes("end delay")) {
+    return `${minuteText}: gioco ripreso.`
+      .trim();
+  }
+
+  return null;
+}
+
 function parseEvent(event) {
   if (!event) {
     return null;
@@ -140,82 +448,299 @@ function parseEvent(event) {
   const type =
     getEventType(event);
 
-  const text =
+  const originalText =
     getEventText(event);
 
   const lowerType =
     type.toLowerCase();
 
-  const result = {
-    id: event.id || null,
+  const team =
+    typeof event.team === "string"
+      ? normalizeTeamName(event.team)
+      : event.team?.displayName
+        ? normalizeTeamName(
+            event.team.displayName
+          )
+        : null;
 
-    type:
-      type || null,
-
-    minute:
-      getEventMinute(event),
-
-    team:
-      typeof event.team === "string"
-        ? normalizeTeamName(event.team)
-        : event.team?.displayName
-          ? normalizeTeamName(
-              event.team.displayName
-            )
-          : null,
-
-    player: null,
-
-    assist: null,
-
-    text:
-      text || null
-  };
-
-  /*
-   * GOL
-   */
+  let player = null;
+  let assist = null;
 
   if (
     lowerType.includes("goal")
   ) {
-    result.player =
-      getPlayerFromText(text);
+    player =
+      getPlayerFromText(
+        originalText
+      );
 
-    result.assist =
-      getAssistFromText(text);
-
-    return result;
+    assist =
+      getAssistFromText(
+        originalText
+      );
   }
 
-  /*
-   * CARTELLINO GIALLO
-   */
-
   if (
-    lowerType.includes("yellow")
-  ) {
-    result.player =
-      getPlayerFromText(text);
-
-    return result;
-  }
-
-  /*
-   * CARTELLINO ROSSO
-   */
-
-  if (
+    lowerType.includes("yellow") ||
     lowerType.includes("red")
   ) {
-    result.player =
-      getPlayerFromText(text);
-
-    return result;
+    player =
+      getPlayerFromText(
+        originalText
+      );
   }
 
-  return result;
+  const italianText =
+    buildItalianEventText(
+      event,
+      team,
+      player,
+      assist
+    );
+
+  return {
+    id:
+      event.id || null,
+
+    type:
+      translateEventType(type),
+
+    minute:
+      getEventMinute(event),
+
+    team,
+
+    player,
+
+    assist,
+
+    text:
+      italianText
+  };
 }
+
+/*
+ * ==========================================
+ * FORMAZIONI
+ * ==========================================
+ */
+
+/*
+ * Estrae il cognome.
+ *
+ * Esempi:
+ * "Lautaro Martínez" -> "Martínez"
+ * "Nicolò Barella" -> "Barella"
+ * "Rafael Leão" -> "Leão"
+ *
+ * Se ESPN restituisce già soltanto il cognome,
+ * viene mantenuto così.
+ */
+
+function getSurname(name) {
+  if (!name) return null;
+
+  const clean =
+    String(name)
+      .trim()
+      .replace(/\s+/g, " ");
+
+  if (!clean) return null;
+
+  const parts =
+    clean.split(" ");
+
+  return parts[parts.length - 1];
+}
+
+/*
+ * Cerca una formazione all'interno
+ * dei vari possibili formati restituiti
+ * da ESPN.
+ */
+
+function findTeamLineup(
+  summary,
+  competitor,
+  side
+) {
+  const teamId =
+    competitor?.team?.id
+      ? String(competitor.team.id)
+      : null;
+
+  const teamName =
+    competitor?.team?.displayName
+      ? competitor.team.displayName
+      : null;
+
+  const sources = [
+    summary?.rosters,
+    summary?.lineups,
+    summary?.teams,
+    summary?.header?.rosters,
+    summary?.header?.lineups
+  ];
+
+  for (const source of sources) {
+    if (!Array.isArray(source)) {
+      continue;
+    }
+
+    const found =
+      source.find(item => {
+        const itemTeamId =
+          item?.team?.id ||
+          item?.teamId ||
+          item?.id;
+
+        const itemTeamName =
+          item?.team?.displayName ||
+          item?.team?.name ||
+          item?.displayName ||
+          item?.name;
+
+        const itemSide =
+          item?.homeAway ||
+          item?.side;
+
+        if (
+          teamId &&
+          itemTeamId &&
+          String(itemTeamId) === teamId
+        ) {
+          return true;
+        }
+
+        if (
+          teamName &&
+          itemTeamName &&
+          String(itemTeamName)
+            .toLowerCase() ===
+            String(teamName)
+              .toLowerCase()
+        ) {
+          return true;
+        }
+
+        if (
+          itemSide &&
+          itemSide === side
+        ) {
+          return true;
+        }
+
+        return false;
+      });
+
+    if (found) {
+      return found;
+    }
+  }
+
+  return null;
+}
+
+/*
+ * Estrae i giocatori dalla formazione.
+ */
+
+function extractLineupPlayers(lineup) {
+  if (!lineup) {
+    return [];
+  }
+
+  const possibleArrays = [
+    lineup?.athletes,
+    lineup?.players,
+    lineup?.roster,
+    lineup?.starters,
+    lineup?.formation?.athletes
+  ];
+
+  let players = null;
+
+  for (const array of possibleArrays) {
+    if (Array.isArray(array)) {
+      players = array;
+      break;
+    }
+  }
+
+  if (!players) {
+    return [];
+  }
+
+  return players
+    .map(player => {
+      const name =
+        player?.athlete?.displayName ||
+        player?.athlete?.fullName ||
+        player?.athlete?.name ||
+        player?.displayName ||
+        player?.fullName ||
+        player?.name ||
+        null;
+
+      return getSurname(name);
+    })
+    .filter(Boolean);
+}
+
+/*
+ * Estrae il modulo.
+ */
+
+function extractFormation(lineup) {
+  if (!lineup) {
+    return null;
+  }
+
+  return (
+    lineup?.formation ||
+    lineup?.formationText ||
+    lineup?.tacticalFormation ||
+    lineup?.displayFormation ||
+    lineup?.formation?.displayName ||
+    lineup?.formation?.text ||
+    null
+  );
+}
+
+/*
+ * Costruisce la formazione finale.
+ */
+
+function buildLineup(
+  summary,
+  competitor,
+  side
+) {
+  const lineup =
+    findTeamLineup(
+      summary,
+      competitor,
+      side
+    );
+
+  if (!lineup) {
+    return null;
+  }
+
+  return {
+    formation:
+      extractFormation(lineup),
+
+    players:
+      extractLineupPlayers(lineup)
+  };
+}
+
+/*
+ * ==========================================
+ * API
+ * ==========================================
+ */
 
 module.exports = async (req, res) => {
   try {
@@ -271,7 +796,7 @@ module.exports = async (req, res) => {
     }
 
     /*
-     * RICHIESTA A ESPN
+     * RICHIESTA ESPN
      */
 
     const summary =
@@ -340,7 +865,29 @@ module.exports = async (req, res) => {
       null;
 
     /*
+     * ======================================
+     * FORMAZIONI
+     * ======================================
+     */
+
+    const homeLineup =
+      buildLineup(
+        summary,
+        home,
+        "home"
+      );
+
+    const awayLineup =
+      buildLineup(
+        summary,
+        away,
+        "away"
+      );
+
+    /*
+     * ======================================
      * EVENTI
+     * ======================================
      */
 
     const rawEvents = [
@@ -363,7 +910,9 @@ module.exports = async (req, res) => {
         .filter(Boolean);
 
     /*
+     * ======================================
      * RISPOSTA
+     * ======================================
      */
 
     return res.status(200).json({
@@ -376,6 +925,7 @@ module.exports = async (req, res) => {
         "Europe/Rome",
 
       competition: {
+
         id:
           competition.id,
 
@@ -440,32 +990,36 @@ module.exports = async (req, res) => {
         status: {
 
           state:
-            competitionInfo
-              ?.status
-              ?.type
-              ?.state ||
-            null,
+            translateStatusState(
+              competitionInfo
+                ?.status
+                ?.type
+                ?.state
+            ),
 
           name:
-            competitionInfo
-              ?.status
-              ?.type
-              ?.name ||
-            null,
+            translateStatusName(
+              competitionInfo
+                ?.status
+                ?.type
+                ?.name
+            ),
 
           description:
-            competitionInfo
-              ?.status
-              ?.type
-              ?.description ||
-            null,
+            translateStatusDescription(
+              competitionInfo
+                ?.status
+                ?.type
+                ?.description
+            ),
 
           detail:
-            competitionInfo
-              ?.status
-              ?.type
-              ?.detail ||
-            null,
+            translateStatusDetail(
+              competitionInfo
+                ?.status
+                ?.type
+                ?.detail
+            ),
 
           clock:
             competitionInfo
@@ -482,6 +1036,27 @@ module.exports = async (req, res) => {
         }
       },
 
+      /*
+       * ====================================
+       * FORMAZIONI
+       * ====================================
+       */
+
+      lineups: {
+
+        home:
+          homeLineup,
+
+        away:
+          awayLineup
+      },
+
+      /*
+       * ====================================
+       * EVENTI
+       * ====================================
+       */
+
       events
 
     });
@@ -489,7 +1064,7 @@ module.exports = async (req, res) => {
   } catch (error) {
 
     console.error(
-      "ESPN MATCH ERROR:",
+      "ERRORE PARTITA ESPN:",
       error
     );
 
@@ -499,7 +1074,7 @@ module.exports = async (req, res) => {
 
       error:
         error.message ||
-        "Errore interno"
+        "Errore interno del server"
     });
   }
 };
