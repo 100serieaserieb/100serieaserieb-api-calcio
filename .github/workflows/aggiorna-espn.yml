@@ -1,8 +1,104 @@
-module.exports = async (req, res) => {
-  return res.status(200).json({
-    success: true,
-    message: "Aggiornamento ESPN funzionante",
-    source: "ESPN",
-    timezone: "Europe/Rome"
+const https = require("https");
+
+function getJSON(url) {
+  return new Promise((resolve, reject) => {
+    https.get(url, {
+      headers: {
+        "User-Agent": "Mozilla/5.0"
+      }
+    }, (res) => {
+      let data = "";
+
+      res.on("data", chunk => {
+        data += chunk;
+      });
+
+      res.on("end", () => {
+        try {
+          resolve(JSON.parse(data));
+        } catch (error) {
+          reject(error);
+        }
+      });
+    }).on("error", reject);
   });
+}
+
+module.exports = async (req, res) => {
+  try {
+    const url =
+      "https://site.api.espn.com/apis/site/v2/sports/soccer/ita.1/scoreboard";
+
+    const data = await getJSON(url);
+
+    const eventi = data.events || [];
+
+    const partite = eventi.map(evento => {
+      const competizioni = evento.competitions || [];
+      const competizione = competizioni[0];
+
+      const concorrenti = competizione?.competitors || [];
+
+      const casa = concorrenti.find(
+        squadra => squadra.homeAway === "home"
+      );
+
+      const trasferta = concorrenti.find(
+        squadra => squadra.homeAway === "away"
+      );
+
+      return {
+        id: evento.id,
+
+        partita: {
+          casa: {
+            id: casa?.team?.id || null,
+            nome: casa?.team?.displayName || null,
+            abbreviazione: casa?.team?.abbreviation || null,
+            logo: casa?.team?.logo || null,
+            gol: casa?.score || "0"
+          },
+
+          trasferta: {
+            id: trasferta?.team?.id || null,
+            nome: trasferta?.team?.displayName || null,
+            abbreviazione: trasferta?.team?.abbreviation || null,
+            logo: trasferta?.team?.logo || null,
+            gol: trasferta?.score || "0"
+          },
+
+          stato: {
+            stato: competizione?.status?.type?.state || null,
+            descrizione:
+              competizione?.status?.type?.shortDetail ||
+              competizione?.status?.type?.description ||
+              null,
+            dettaglio:
+              competizione?.status?.type?.detail || null,
+            completata:
+              competizione?.status?.type?.completed || false
+          }
+        }
+      };
+    });
+
+    return res.status(200).json({
+      success: true,
+      message: "Dati ESPN aggiornati correttamente",
+      fonte: "ESPN",
+      fusoOrario: "Europe/Rome",
+      aggiornato: new Date().toISOString(),
+      numeroPartite: partite.length,
+      partite
+    });
+
+  } catch (error) {
+    console.error("Errore aggiornamento ESPN:", error);
+
+    return res.status(500).json({
+      success: false,
+      message: "Errore durante l'aggiornamento ESPN",
+      errore: error.message
+    });
+  }
 };
