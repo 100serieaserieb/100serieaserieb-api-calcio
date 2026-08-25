@@ -1,60 +1,12 @@
 import { NextResponse } from "next/server";
 
-const ESPN_BASE =
+const ESPN_BASE_URL =
   "https://site.api.espn.com/apis/site/v2/sports/soccer";
 
 const DEFAULT_LEAGUE = "ita.1";
 
-const TIMEZONE = "Europe/Rome";
-
-/* =========================================================
-   FETCH SICURO
-========================================================= */
-
-async function fetchJSON(url) {
-  try {
-    const response = await fetch(url, {
-      headers: {
-        Accept: "application/json",
-        "User-Agent": "100SerieASerieB-API/1.0",
-      },
-      cache: "no-store",
-    });
-
-    if (!response.ok) {
-      console.error(
-        "ESPN ERROR:",
-        response.status,
-        url
-      );
-
-      return null;
-    }
-
-    return await response.json();
-  } catch (error) {
-    console.error(
-      "ESPN FETCH ERROR:",
-      error?.message || error
-    );
-
-    return null;
-  }
-}
-
-/* =========================================================
-   HELPERS
-========================================================= */
-
-function arr(value) {
-  return Array.isArray(value) ? value : [];
-}
-
 function clean(value) {
-  if (
-    value === null ||
-    value === undefined
-  ) {
+  if (value === undefined || value === null) {
     return null;
   }
 
@@ -63,97 +15,90 @@ function clean(value) {
   return text || null;
 }
 
-function first(...values) {
-  for (const value of values) {
-    if (
-      value !== null &&
-      value !== undefined &&
-      value !== ""
-    ) {
-      return value;
-    }
+function number(value) {
+  if (value === undefined || value === null) {
+    return null;
+  }
+
+  const n = Number(value);
+
+  return Number.isFinite(n) ? n : null;
+}
+
+function teamName(team) {
+  if (!team) return null;
+
+  return clean(
+    team.displayName ||
+      team.name ||
+      team.shortDisplayName ||
+      team.abbreviation
+  );
+}
+
+function teamLogo(team) {
+  if (!team) return null;
+
+  if (team.logo) {
+    return team.logo;
+  }
+
+  if (
+    Array.isArray(team.logos) &&
+    team.logos.length > 0
+  ) {
+    return team.logos[0]?.href || null;
   }
 
   return null;
 }
 
-function number(value) {
-  if (
-    value === null ||
-    value === undefined ||
-    value === ""
-  ) {
-    return null;
+function normalizeStatus(competition) {
+  const status = competition?.status || {};
+  const type = status.type || {};
+
+  let state = "programmata";
+
+  if (type.completed === true) {
+    state = "terminata";
+  } else if (type.state === "in") {
+    state = "live";
   }
 
-  if (typeof value === "number") {
-    return Number.isFinite(value)
-      ? value
-      : null;
-  }
-
-  const match = String(value).match(
-    /-?\d+(?:[.,]\d+)?/
-  );
-
-  if (!match) return null;
-
-  const result = Number(
-    match[0].replace(",", ".")
-  );
-
-  return Number.isFinite(result)
-    ? result
-    : null;
+  return {
+    state,
+    name: clean(type.name),
+    description: clean(type.description),
+    detail: clean(type.detail),
+    clock: clean(status.displayClock),
+    completed: type.completed === true,
+  };
 }
 
-function name(value) {
-  if (!value) return null;
+function getEventTeams(competition) {
+  const competitors =
+    Array.isArray(competition?.competitors)
+      ? competition.competitors
+      : [];
 
-  if (typeof value === "string") {
-    return clean(value);
-  }
+  const home =
+    competitors.find(
+      (item) => item.homeAway === "home"
+    ) || null;
 
-  return clean(
-    first(
-      value.displayName,
-      value.fullName,
-      value.shortName,
-      value.name
-    )
-  );
+  const away =
+    competitors.find(
+      (item) => item.homeAway === "away"
+    ) || null;
+
+  return {
+    home,
+    away,
+  };
 }
 
-function unique(values) {
-  return [
-    ...new Set(
-      values
-        .map(clean)
-        .filter(Boolean)
-    ),
-  ];
-}
-
-/* =========================================================
-   LEAGUE
-========================================================= */
-
-function getLeague(request) {
-  const url = new URL(request.url);
-
-  return (
-    clean(
-      url.searchParams.get("league")
-    ) || DEFAULT_LEAGUE
-  );
-}
-
-/* =========================================================
-   TEAM
-========================================================= */
-
-function normalizeTeam(team) {
-  if (!team) {
+function normalizeTeam(competitor) {
+  if (!competitor) {
     return {
       id: null,
       name: null,
@@ -163,573 +108,36 @@ function normalizeTeam(team) {
     };
   }
 
-  return {
-    id: clean(
-      first(
-        team.id,
-        team.team?.id
-      )
-    ),
+  const team =
+    competitor.team || competitor;
 
-    name: name(
-      first(
-        team.team,
-        team
-      )
-    ),
+  return {
+    id: clean(team.id || competitor.id),
+
+    name: teamName(team),
 
     abbreviation: clean(
-      first(
-        team.team?.abbreviation,
-        team.abbreviation
-      )
+      team.abbreviation ||
+        competitor.abbreviation
     ),
 
-    logo: clean(
-      first(
-        team.team?.logos?.[0]?.href,
-        team.logos?.[0]?.href,
-        team.logo
-      )
-    ),
+    logo: teamLogo(team),
 
     score: number(
-      first(
-        team.score,
-        team.score?.value
-      )
+      competitor.score
     ),
   };
 }
 
-/* =========================================================
-   STATUS
-========================================================= */
-
-function normalizeStatus(competition) {
-  const status =
-    competition?.status || {};
-
-  const type =
-    status.type || {};
-
-  let state = "scheduled";
-
-  if (
-    type.completed === true ||
-    status.completed === true
-  ) {
-    state = "terminata";
-  } else if (
-    type.state === "in" ||
-    status.state === "in"
-  ) {
-    state = "live";
-  }
-
-  return {
-    state,
-
-    name: clean(
-      first(
-        type.name,
-        status.name
-      )
-    ),
-
-    description: clean(
-      first(
-        type.description,
-        status.description
-      )
-    ),
-
-    detail: clean(
-      first(
-        type.detail,
-        status.detail
-      )
-    ),
-
-    clock: clean(
-      first(
-        status.displayClock,
-        status.clock
-      )
-    ),
-
-    completed:
-      type.completed === true ||
-      status.completed === true,
-  };
-}
-
-/* =========================================================
-   VENUE
-========================================================= */
-
-function normalizeVenue(competition) {
-  const venue =
-    competition?.venue;
-
-  if (!venue) return null;
-
-  const address =
-    venue.address || {};
-
-  return {
-    id: clean(venue.id),
-
-    name: clean(
-      first(
-        venue.fullName,
-        venue.name
-      )
-    ),
-
-    city: clean(
-      address.city
-    ),
-
-    country: clean(
-      first(
-        address.country,
-        address.countryName
-      )
-    ),
-
-    capacity: number(
-      venue.capacity
-    ),
-
-    address: clean(
-      first(
-        address.fullAddress,
-        address.street
-      )
-    ),
-  };
-}
-
-/* =========================================================
-   TV
-========================================================= */
-
-function normalizeTV(summary) {
-  const result = [];
-
-  for (const broadcast of arr(
-    summary?.broadcasts
-  )) {
-    const values = [
-      broadcast?.name,
-      broadcast?.shortName,
-      broadcast?.market,
-      broadcast?.media?.name,
-      broadcast?.media?.shortName,
-    ];
-
-    for (const value of values) {
-      const item = clean(value);
-
-      if (item) {
-        result.push(item);
-      }
-    }
-  }
-
-  return unique(result);
-}
-
-/* =========================================================
-   OFFICIALS
-========================================================= */
-
-function getOfficialName(official) {
-  if (!official) return null;
-
-  return name(
-    first(
-      official.athlete,
-      official.displayName,
-      official.fullName,
-      official.name
-    )
-  );
-}
-
-function normalizeOfficials(summary) {
-  const result = {
-    referee: null,
-    assistantReferee1: null,
-    assistantReferee2: null,
-    fourthOfficial: null,
-    var: null,
-    avar: null,
-  };
-
-  const officials = arr(
-    summary?.officials
-  );
-
-  for (const official of officials) {
-    const officialName =
-      getOfficialName(official);
-
-    if (!officialName) continue;
-
-    const role = String(
-      first(
-        official.type?.text,
-        official.type?.name,
-        official.role,
-        official.position,
-        ""
-      )
-    ).toLowerCase();
-
-    if (
-      role.includes("avar") ||
-      role.includes("video assistant")
-    ) {
-      if (!result.avar) {
-        result.avar = officialName;
-      }
-
-      continue;
-    }
-
-    if (
-      role.includes("var")
-    ) {
-      if (!result.var) {
-        result.var = officialName;
-      }
-
-      continue;
-    }
-
-    if (
-      role.includes("fourth") ||
-      role.includes("4th")
-    ) {
-      if (!result.fourthOfficial) {
-        result.fourthOfficial =
-          officialName;
-      }
-
-      continue;
-    }
-
-    if (
-      role.includes("assistant") ||
-      role.includes("linesman")
-    ) {
-      if (!result.assistantReferee1) {
-        result.assistantReferee1 =
-          officialName;
-      } else if (
-        !result.assistantReferee2
-      ) {
-        result.assistantReferee2 =
-          officialName;
-      }
-
-      continue;
-    }
-
-    if (
-      role.includes("referee") ||
-      role.includes("arbitro")
-    ) {
-      if (!result.referee) {
-        result.referee =
-          officialName;
-      }
-    }
-  }
-
-  /*
-   * Fallback:
-   * se ESPN restituisce gli ufficiali
-   * senza il ruolo, usa l'ordine.
-   */
-
-  const names = unique(
-    officials
-      .map(getOfficialName)
-      .filter(Boolean)
-  );
-
-  if (!result.referee && names[0]) {
-    result.referee = names[0];
-  }
-
-  if (
-    !result.assistantReferee1 &&
-    names[1]
-  ) {
-    result.assistantReferee1 =
-      names[1];
-  }
-
-  if (
-    !result.assistantReferee2 &&
-    names[2]
-  ) {
-    result.assistantReferee2 =
-      names[2];
-  }
-
-  if (
-    !result.fourthOfficial &&
-    names[3]
-  ) {
-    result.fourthOfficial =
-      names[3];
-  }
-
-  if (!result.var && names[4]) {
-    result.var = names[4];
-  }
-
-  if (!result.avar && names[5]) {
-    result.avar = names[5];
-  }
-
-  return result;
-}
-
-/* =========================================================
-   LINEUPS
-========================================================= */
-
-function getPlayerName(player) {
-  if (!player) return null;
-
-  return name(
-    first(
-      player.athlete,
-      player.player,
-      player.displayName,
-      player.fullName,
-      player.name
-    )
-  );
-}
-
-function normalizeLineup(competitor) {
-  const lineup =
-    competitor?.lineup ||
-    null;
-
-  const players = arr(
-    lineup?.players ||
-    competitor?.players
-  );
-
-  const result = [];
-
-  for (const player of players) {
-    const playerName =
-      getPlayerName(player);
-
-    if (!playerName) continue;
-
-    result.push({
-      id: clean(
-        first(
-          player.athlete?.id,
-          player.player?.id,
-          player.id
-        )
-      ),
-
-      name: playerName,
-
-      jersey: clean(
-        first(
-          player.jersey,
-          player.athlete?.jersey
-        )
-      ),
-
-      position: clean(
-        first(
-          player.position?.abbreviation,
-          player.position?.name,
-          player.athlete?.position?.abbreviation
-        )
-      ),
-
-      starter:
-        player.starter === true ||
-        player.status === "starter",
-
-      substitute:
-        player.substitute === true ||
-        player.status === "substitute",
-    });
-  }
-
-  return {
-    formation: clean(
-      first(
-        lineup?.formation,
-        competitor?.formation
-      )
-    ),
-
-    starters: result.filter(
-      (p) => p.starter
-    ),
-
-    substitutes: result.filter(
-      (p) => p.substitute
-    ),
-
-    players: result,
-  };
-}
-
-/* =========================================================
-   STATISTICS
-========================================================= */
-
-function findStat(
-  statistics,
-  aliases
-) {
-  const list = arr(statistics);
-
-  for (const stat of list) {
-    const statName = String(
-      first(
-        stat.name,
-        stat.label,
-        stat.abbreviation,
-        ""
-      )
-    ).toLowerCase();
-
-    for (const alias of aliases) {
-      if (
-        statName === alias ||
-        statName.includes(alias)
-      ) {
-        return first(
-          stat.displayValue,
-          stat.value
-        );
-      }
-    }
-  }
-
-  return null;
-}
-
-function normalizeStats(boxscoreTeam) {
-  const statistics = arr(
-    boxscoreTeam?.statistics
-  );
-
-  return {
-    team: name(
-      first(
-        boxscoreTeam?.team,
-        boxscoreTeam?.competitor
-      )
-    ),
-
-    tiri: number(
-      findStat(statistics, [
-        "shots",
-        "total shots",
-        "tiri",
-      ])
-    ),
-
-    tiriInPorta: number(
-      findStat(statistics, [
-        "shots on target",
-        "shots on goal",
-        "tiri in porta",
-      ])
-    ),
-
-    possesso: number(
-      findStat(statistics, [
-        "possession",
-        "possesso",
-      ])
-    ),
-
-    calciDangolo: number(
-      findStat(statistics, [
-        "corner kicks",
-        "corners",
-        "corner",
-        "calci d'angolo",
-      ])
-    ),
-
-    fuorigioco: number(
-      findStat(statistics, [
-        "offsides",
-        "offside",
-        "fuorigioco",
-      ])
-    ),
-
-    falli: number(
-      findStat(statistics, [
-        "fouls",
-        "falli",
-      ])
-    ),
-
-    parate: number(
-      findStat(statistics, [
-        "saves",
-        "save",
-        "parate",
-      ])
-    ),
-
-    cartelliniGialli: number(
-      findStat(statistics, [
-        "yellow cards",
-        "yellow card",
-      ])
-    ),
-
-    cartelliniRossi: number(
-      findStat(statistics, [
-        "red cards",
-        "red card",
-      ])
-    ),
-  };
-}
-
-/* =========================================================
-   EVENTS
-========================================================= */
-
-function normalizeEvent(play) {
+function normalizePlay(play) {
   if (!play) return null;
 
-  const rawType = String(
-    first(
-      play.type?.text,
-      play.type?.name,
-      play.type,
+  const typeText = String(
+    play.type?.text ||
+      play.type?.name ||
+      play.type ||
       ""
-    )
-  );
-
-  const typeText =
-    rawType.toLowerCase();
+  ).toLowerCase();
 
   let type = "altro";
 
@@ -754,18 +162,12 @@ function normalizeEvent(play) {
   ) {
     type = "sostituzione";
   } else if (
-    typeText.includes("penalty") ||
-    typeText.includes("rigore")
-  ) {
-    type = "rigore";
-  } else if (
     typeText.includes("kickoff") ||
     typeText.includes("inizio")
   ) {
     type = "inizio";
   } else if (
     typeText.includes("half") ||
-    typeText.includes("intervallo") ||
     typeText.includes("tempo")
   ) {
     type = "intervallo";
@@ -775,19 +177,58 @@ function normalizeEvent(play) {
   ) {
     type = "fine";
   } else if (
+    typeText.includes("penalty") ||
+    typeText.includes("rigore")
+  ) {
+    type = "rigore";
+  } else if (
     typeText.includes("interruption") ||
     typeText.includes("interruzione")
   ) {
     type = "interruzione";
   }
 
-  const competition =
-    arr(play.competitions)[0];
+  const competitor =
+    play.competitor || null;
 
   const athlete =
     play.athlete ||
     play.player ||
     null;
+
+  let playerIn = null;
+  let playerOut = null;
+
+  if (play.substitution) {
+    playerIn =
+      play.substitution.playerIn || null;
+
+    playerOut =
+      play.substitution.playerOut || null;
+  }
+
+  if (play.playerIn) {
+    playerIn = play.playerIn;
+  }
+
+  if (play.playerOut) {
+    playerOut = play.playerOut;
+  }
+
+  function personName(value) {
+    if (!value) return null;
+
+    if (typeof value === "string") {
+      return clean(value);
+    }
+
+    return clean(
+      value.displayName ||
+        value.fullName ||
+        value.name ||
+        value.athlete?.displayName
+    );
+  }
 
   return {
     id: clean(play.id),
@@ -795,223 +236,258 @@ function normalizeEvent(play) {
     type,
 
     minute: clean(
-      first(
-        play.clock?.displayValue,
-        play.clock,
+      play.clock?.displayValue ||
+        play.clock ||
         play.minute
-      )
     ),
 
-    team: name(
-      first(
-        competition?.team,
-        competition?.competitor?.team,
+    team: personName(
+      competitor?.team ||
         play.team
-      )
     ),
 
-    player: name(
-      athlete
+    player: personName(athlete),
+
+    assist: personName(
+      play.assist
     ),
 
-    assist: name(
-      first(
-        play.assist,
-        play.assist?.athlete
-      )
+    playerIn: personName(
+      playerIn
     ),
 
-    playerIn: name(
-      first(
-        play.playerIn,
-        play.substitution?.playerIn
-      )
-    ),
-
-    playerOut: name(
-      first(
-        play.playerOut,
-        play.substitution?.playerOut
-      )
+    playerOut: personName(
+      playerOut
     ),
 
     text: clean(
-      first(
-        play.text,
+      play.text ||
         play.description
+    ),
+  };
+}
+
+function normalizeStatistics(
+  boxscoreTeam,
+  teamNameValue
+) {
+  const stats =
+    Array.isArray(
+      boxscoreTeam?.statistics
+    )
+      ? boxscoreTeam.statistics
+      : [];
+
+  function find(...names) {
+    for (const stat of stats) {
+      const label = String(
+        stat.name ||
+          stat.label ||
+          stat.abbreviation ||
+          ""
+      ).toLowerCase();
+
+      for (const name of names) {
+        if (
+          label === name ||
+          label.includes(name)
+        ) {
+          return (
+            stat.value ??
+            stat.displayValue ??
+            null
+          );
+        }
+      }
+    }
+
+    return null;
+  }
+
+  return {
+    team: teamNameValue,
+
+    tiri: number(
+      find(
+        "shots",
+        "total shots",
+        "tiri"
+      )
+    ),
+
+    tiriInPorta: number(
+      find(
+        "shots on target",
+        "shots on goal",
+        "tiri in porta"
+      )
+    ),
+
+    possesso: number(
+      find(
+        "possession",
+        "possesso"
+      )
+    ),
+
+    calciDangolo: number(
+      find(
+        "corner kicks",
+        "corners",
+        "calci d'angolo"
+      )
+    ),
+
+    fuorigioco: number(
+      find(
+        "offsides",
+        "fuorigioco"
+      )
+    ),
+
+    falli: number(
+      find(
+        "fouls",
+        "falli"
+      )
+    ),
+
+    cartelliniGialli: number(
+      find(
+        "yellow cards",
+        "cartellini gialli"
+      )
+    ),
+
+    cartelliniRossi: number(
+      find(
+        "red cards",
+        "cartellini rossi"
+      )
+    ),
+
+    parate: number(
+      find(
+        "saves",
+        "parades",
+        "parate"
+      )
+    ),
+
+    rigori: number(
+      find(
+        "penalty kicks",
+        "penalties",
+        "rigori"
       )
     ),
   };
 }
 
-/* =========================================================
-   PENALTIES
-========================================================= */
-
-function normalizePenalties(
-  summary,
-  plays
+function normalizeLineup(
+  competitor
 ) {
-  const result = [];
-
-  for (const penalty of arr(
-    summary?.penalties
-  )) {
-    const text = String(
-      first(
-        penalty.result,
-        penalty.outcome,
-        penalty.displayValue,
-        ""
-      )
-    );
-
-    result.push({
-      minute: clean(
-        first(
-          penalty.minute,
-          penalty.clock
+  const roster =
+    Array.isArray(
+      competitor?.roster
+    )
+      ? competitor.roster
+      : Array.isArray(
+          competitor?.lineup
         )
-      ),
+      ? competitor.lineup
+      : [];
 
-      team: name(
-        first(
-          penalty.team,
-          penalty.competitor
-        )
-      ),
+  const players = roster.map(
+    (item) => {
+      const athlete =
+        item.athlete ||
+        item.player ||
+        item;
 
-      player: name(
-        first(
-          penalty.athlete,
-          penalty.player
-        )
-      ),
+      return {
+        id: clean(
+          athlete?.id ||
+            item.id
+        ),
 
-      result: clean(text),
+        name: clean(
+          athlete?.displayName ||
+            athlete?.fullName ||
+            athlete?.name
+        ),
 
-      scored:
-        typeof penalty.scored ===
-        "boolean"
-          ? penalty.scored
-          : null,
-    });
-  }
+        jersey: clean(
+          item.jersey ||
+            athlete?.jersey
+        ),
 
-  for (const play of plays) {
-    const text = String(
-      play?.text || ""
-    ).toLowerCase();
+        position: clean(
+          item.position?.abbreviation ||
+            item.position?.name
+        ),
 
-    if (
-      !text.includes("penalty") &&
-      !text.includes("rigore")
-    ) {
-      continue;
+        starter:
+          item.starter === true,
+
+        substitute:
+          item.substitute === true,
+      };
+    }
+  );
+
+  return {
+    formation: clean(
+      competitor?.formation ||
+        competitor?.lineup?.formation
+    ),
+
+    players,
+  };
+}
+
+async function fetchJSON(url) {
+  const controller =
+    new AbortController();
+
+  const timeout = setTimeout(
+    () => controller.abort(),
+    10000
+  );
+
+  try {
+    const response =
+      await fetch(url, {
+        headers: {
+          Accept:
+            "application/json",
+        },
+        cache: "no-store",
+        signal: controller.signal,
+      });
+
+    if (!response.ok) {
+      throw new Error(
+        `ESPN ${response.status}`
+      );
     }
 
-    result.push({
-      minute: clean(
-        first(
-          play.clock?.displayValue,
-          play.clock,
-          play.minute
-        )
-      ),
-
-      team: name(
-        first(
-          play.team,
-          play.competitor?.team
-        )
-      ),
-
-      player: name(
-        first(
-          play.athlete,
-          play.player
-        )
-      ),
-
-      result: clean(
-        play.text
-      ),
-
-      scored:
-        text.includes("scored") ||
-        text.includes("goal") ||
-        text.includes("segnato")
-          ? true
-          : text.includes("missed") ||
-            text.includes("saved") ||
-            text.includes("parato")
-          ? false
-          : null,
-    });
+    return await response.json();
+  } finally {
+    clearTimeout(timeout);
   }
-
-  return result;
 }
 
-/* =========================================================
-   MVP
-========================================================= */
-
-function normalizeMVP(summary) {
-  const candidates = [
-    summary?.playerOfTheMatch,
-    summary?.mvp,
-    summary?.gameInfo?.mvp,
-  ];
-
-  for (const candidate of candidates) {
-    if (!candidate) continue;
-
-    const athlete =
-      candidate.athlete ||
-      candidate.player ||
-      candidate;
-
-    const playerName =
-      name(athlete);
-
-    if (!playerName) continue;
-
-    return {
-      name: playerName,
-
-      team: name(
-        first(
-          candidate.team,
-          athlete.team
-        )
-      ),
-
-      reason: clean(
-        first(
-          candidate.reason,
-          candidate.description
-        )
-      ),
-    };
-  }
-
-  return null;
-}
-
-/* =========================================================
-   SEARCH MATCH
-========================================================= */
-
-async function searchMatch(
+async function findEvent(
   league,
   query,
   date
 ) {
-  let endpoint =
-    `${ESPN_BASE}/${league}/scoreboard`;
+  let url =
+    `${ESPN_BASE_URL}/${league}/scoreboard`;
 
-  const params = new URLSearchParams();
+  const params =
+    new URLSearchParams();
 
   if (date) {
     params.set(
@@ -1022,51 +498,41 @@ async function searchMatch(
 
   params.set("limit", "100");
 
-  endpoint +=
-    "?" + params.toString();
+  url += `?${params.toString()}`;
 
   const data =
-    await fetchJSON(endpoint);
+    await fetchJSON(url);
 
   const events =
-    arr(data?.events);
+    Array.isArray(data?.events)
+      ? data.events
+      : [];
 
   if (!query) {
     return events[0] || null;
   }
 
   const search =
-    query
-      .toLowerCase()
-      .trim();
+    query.toLowerCase().trim();
 
   return (
     events.find((event) => {
       const competitors =
-        arr(
-          event?.competitions?.[0]
-            ?.competitors
-        );
+        event.competitions?.[0]
+          ?.competitors || [];
 
       return competitors.some(
         (competitor) => {
-          const team =
-            competitor?.team;
-
-          const values = [
-            team?.name,
-            team?.displayName,
-            team?.shortDisplayName,
-            team?.abbreviation,
-          ]
-            .filter(Boolean)
-            .map((x) =>
-              String(x).toLowerCase()
+          const name =
+            teamName(
+              competitor.team
             );
 
-          return values.some(
-            (value) =>
-              value.includes(search)
+          return (
+            name &&
+            name
+              .toLowerCase()
+              .includes(search)
           );
         }
       );
@@ -1074,63 +540,93 @@ async function searchMatch(
   );
 }
 
-/* =========================================================
-   GET
-========================================================= */
-
 export async function GET(request) {
   try {
-    const url =
+    const { searchParams } =
       new URL(request.url);
 
     const league =
-      getLeague(request);
+      searchParams.get(
+        "league"
+      ) ||
+      searchParams.get(
+        "competition"
+      ) === "serie-a"
+        ? "ita.1"
+        : "ita.1";
 
-    const id =
-      clean(
-        first(
-          url.searchParams.get("id"),
-          url.searchParams.get("event"),
-          url.searchParams.get("matchId")
-        )
+    const eventId =
+      searchParams.get("id") ||
+      searchParams.get("event") ||
+      searchParams.get(
+        "matchId"
       );
 
     const query =
-      clean(
-        first(
-          url.searchParams.get("q"),
-          url.searchParams.get("search")
-        )
-      );
+      searchParams.get("q") ||
+      searchParams.get("search");
 
     const date =
-      clean(
-        url.searchParams.get("date")
-      );
-
-    /* -----------------------------------------------------
-       TROVA LA PARTITA
-    ----------------------------------------------------- */
+      searchParams.get("date");
 
     let event = null;
 
-    if (id) {
-      const data =
-        await fetchJSON(
-          `${ESPN_BASE}/${league}/scoreboard?limit=100`
+    /*
+     * ==========================================
+     * CERCA PER ID
+     * ==========================================
+     */
+
+    if (eventId) {
+      event =
+        await findEvent(
+          league,
+          null,
+          date
         );
 
-      event =
-        arr(data?.events).find(
-          (item) =>
-            String(item.id) ===
-            String(id)
-        ) || null;
+      /*
+       * Se la partita non è nel
+       * primo scoreboard, proviamo
+       * direttamente la ricerca
+       * su più giorni senza bloccare.
+       */
+
+      if (
+        !event ||
+        String(event.id) !==
+          String(eventId)
+      ) {
+        const scoreboard =
+          await fetchJSON(
+            `${ESPN_BASE_URL}/${league}/scoreboard?limit=100`
+          );
+
+        const events =
+          Array.isArray(
+            scoreboard?.events
+          )
+            ? scoreboard.events
+            : [];
+
+        event =
+          events.find(
+            (item) =>
+              String(item.id) ===
+              String(eventId)
+          ) || null;
+      }
     }
 
-    if (!event) {
+    /*
+     * ==========================================
+     * CERCA PER NOME
+     * ==========================================
+     */
+
+    if (!event && query) {
       event =
-        await searchMatch(
+        await findEvent(
           league,
           query,
           date
@@ -1143,159 +639,127 @@ export async function GET(request) {
           success: false,
           source: "ESPN",
           error:
-            "Partita non trovata.",
+            "Partita non trovata",
           query: query || null,
-          eventId: id || null,
+          eventId:
+            eventId || null,
         },
         { status: 404 }
       );
     }
 
-    const eventId =
+    const actualEventId =
       String(event.id);
 
-    /* -----------------------------------------------------
-       SUMMARY
-    ----------------------------------------------------- */
+    /*
+     * ==========================================
+     * SUMMARY
+     * ==========================================
+     */
 
     const summary =
       await fetchJSON(
-        `${ESPN_BASE}/${league}/summary?event=${eventId}`
+        `${ESPN_BASE_URL}/${league}/summary?event=${actualEventId}`
       );
 
     const competition =
       summary?.header
         ?.competitions?.[0] ||
       summary?.competitions?.[0] ||
-      event?.competitions?.[0] ||
+      event.competitions?.[0] ||
       null;
 
-    const competitors =
-      arr(
-        competition?.competitors
+    if (!competition) {
+      throw new Error(
+        "Competizione ESPN non trovata"
+      );
+    }
+
+    const {
+      home,
+      away,
+    } =
+      getEventTeams(
+        competition
       );
 
-    const homeRaw =
-      competitors.find(
-        (item) =>
-          item.homeAway === "home"
-      ) ||
-      competitors[0] ||
-      null;
+    const homeTeam =
+      normalizeTeam(home);
 
-    const awayRaw =
-      competitors.find(
-        (item) =>
-          item.homeAway === "away"
-      ) ||
-      competitors[1] ||
-      null;
+    const awayTeam =
+      normalizeTeam(away);
 
-    const home =
-      normalizeTeam(homeRaw);
+    /*
+     * ==========================================
+     * BOX SCORE
+     * ==========================================
+     */
 
-    const away =
-      normalizeTeam(awayRaw);
+    const boxscore =
+      summary?.boxscore;
 
-    /* -----------------------------------------------------
-       LINEUPS
-    ----------------------------------------------------- */
-
-    const homeLineup =
-      normalizeLineup(homeRaw);
-
-    const awayLineup =
-      normalizeLineup(awayRaw);
-
-    /* -----------------------------------------------------
-       BOXSCORE / STATISTICHE
-    ----------------------------------------------------- */
-
-    const boxscoreTeams =
-      arr(
-        summary?.boxscore?.teams
-      );
+    const boxTeams =
+      Array.isArray(
+        boxscore?.teams
+      )
+        ? boxscore.teams
+        : [];
 
     const homeBox =
-      boxscoreTeams.find(
+      boxTeams.find(
         (item) =>
-          item.homeAway === "home"
+          item.homeAway ===
+          "home"
       );
 
     const awayBox =
-      boxscoreTeams.find(
+      boxTeams.find(
         (item) =>
-          item.homeAway === "away"
+          item.homeAway ===
+          "away"
       );
 
-    const homeStats =
-      normalizeStats(
-        homeBox
-      );
-
-    const awayStats =
-      normalizeStats(
-        awayBox
-      );
-
-    homeStats.team =
-      home.name;
-
-    awayStats.team =
-      away.name;
-
-    /* -----------------------------------------------------
-       EVENTI
-    ----------------------------------------------------- */
-
-    const rawPlays =
-      arr(
-        summary?.plays
-      );
-
-    const events =
-      rawPlays
-        .map(normalizeEvent)
-        .filter(Boolean);
-
-    /* -----------------------------------------------------
-       DATA / ORA
-    ----------------------------------------------------- */
+    /*
+     * ==========================================
+     * DATA E ORA
+     * ==========================================
+     */
 
     const rawDate =
-      first(
-        competition?.date,
-        event?.date
-      );
+      competition.date ||
+      event.date ||
+      null;
 
-    let formattedDate = null;
-    let formattedTime = null;
+    let dateFormatted = null;
+    let timeFormatted = null;
 
     if (rawDate) {
-      const dateObject =
+      const parsed =
         new Date(rawDate);
 
       if (
         !Number.isNaN(
-          dateObject.getTime()
+          parsed.getTime()
         )
       ) {
-        formattedDate =
-          dateObject.toLocaleDateString(
+        dateFormatted =
+          parsed.toLocaleDateString(
             "it-IT",
             {
-              timeZone: TIMEZONE,
+              timeZone:
+                "Europe/Rome",
               day: "2-digit",
               month: "2-digit",
               year: "numeric",
             }
           );
 
-        formattedTime =
-          dateObject.toLocaleTimeString(
+        timeFormatted =
+          parsed.toLocaleTimeString(
             "it-IT",
             {
-              timeZone: TIMEZONE,
+              timeZone:
+                "Europe/Rome",
               hour: "2-digit",
               minute: "2-digit",
             }
@@ -1303,126 +767,227 @@ export async function GET(request) {
       }
     }
 
-    /* -----------------------------------------------------
-       RISPOSTA
-    ----------------------------------------------------- */
+    /*
+     * ==========================================
+     * EVENTI
+     * ==========================================
+     */
 
-    return NextResponse.json(
-      {
-        success: true,
+    const plays =
+      Array.isArray(
+        summary?.plays
+      )
+        ? summary.plays
+        : [];
 
-        source: "ESPN",
+    const events =
+      plays
+        .map(normalizePlay)
+        .filter(Boolean);
 
-        timezone: TIMEZONE,
+    /*
+     * ==========================================
+     * TV
+     * ==========================================
+     */
 
-        competition: {
-          id: clean(
-            first(
-              event?.league?.id,
-              competition?.league?.id
-            )
-          ),
+    const tv = [];
 
-          name: clean(
-            first(
-              event?.league?.name,
-              competition?.league?.name
-            )
-          ),
+    const broadcasts = [
+      ...(Array.isArray(
+        summary?.broadcasts
+      )
+        ? summary.broadcasts
+        : []),
 
-          espnLeague: league,
+      ...(Array.isArray(
+        competition?.broadcasts
+      )
+        ? competition.broadcasts
+        : []),
+    ];
 
-          season: clean(
-            first(
-              event?.season?.year,
-              competition?.season?.year
-            )
-          ),
-        },
+    for (const broadcast of broadcasts) {
+      const names = [
+        broadcast?.name,
+        broadcast?.shortName,
+        broadcast?.media?.name,
+        broadcast?.media?.shortName,
+      ];
 
-        match: {
-          id: eventId,
+      for (const value of names) {
+        const cleanValue =
+          clean(value);
 
-          date:
-            formattedDate ||
-            clean(rawDate),
+        if (
+          cleanValue &&
+          !tv.includes(
+            cleanValue
+          )
+        ) {
+          tv.push(
+            cleanValue
+          );
+        }
+      }
+    }
 
-          time:
-            formattedTime,
+    /*
+     * ==========================================
+     * VENUE
+     * ==========================================
+     */
 
-          home: {
-            ...home,
+    const venue =
+      competition.venue ||
+      null;
 
-            score:
-              home.score ??
-              number(
-                homeRaw?.score
-              ),
-          },
+    /*
+     * ==========================================
+     * RISPOSTA
+     * ==========================================
+     */
 
-          away: {
-            ...away,
+    const response = {
+      success: true,
 
-            score:
-              away.score ??
-              number(
-                awayRaw?.score
-              ),
-          },
+      source: "ESPN",
 
-          status:
-            normalizeStatus(
-              competition
-            ),
-        },
+      timezone:
+        "Europe/Rome",
 
-        lineups: {
-          home: homeLineup,
-          away: awayLineup,
-        },
+      competition: {
+        id: clean(
+          competition.id
+        ),
 
-        statistics: {
-          home: homeStats,
-          away: awayStats,
-        },
+        name: clean(
+          competition.league
+            ?.name ||
+            event.league
+              ?.name ||
+            "Serie A"
+        ),
 
-        penalties:
-          normalizePenalties(
-            summary,
-            rawPlays
-          ),
+        espnLeague:
+          league,
 
-        venue:
-          normalizeVenue(
-            competition
-          ),
-
-        referee:
-          normalizeOfficials(
-            summary
-          ).referee,
-
-        officials:
-          normalizeOfficials(
-            summary
-          ),
-
-        tv:
-          normalizeTV(
-            summary
-          ),
-
-        mvp:
-          normalizeMVP(
-            summary
-          ),
-
-        events,
+        season: clean(
+          competition.season
+            ?.year ||
+            event.season
+              ?.year
+        ),
       },
 
+      match: {
+        id:
+          actualEventId,
+
+        date:
+          dateFormatted ||
+          rawDate,
+
+        time:
+          timeFormatted,
+
+        home:
+          homeTeam,
+
+        away:
+          awayTeam,
+
+        status:
+          normalizeStatus(
+            competition
+          ),
+      },
+
+      lineups: {
+        home:
+          normalizeLineup(
+            home
+          ),
+
+        away:
+          normalizeLineup(
+            away
+          ),
+      },
+
+      statistics: {
+        home:
+          normalizeStatistics(
+            homeBox,
+            homeTeam.name
+          ),
+
+        away:
+          normalizeStatistics(
+            awayBox,
+            awayTeam.name
+          ),
+      },
+
+      penalties: [],
+
+      venue: venue
+        ? {
+            id:
+              clean(
+                venue.id
+              ),
+
+            name:
+              clean(
+                venue.fullName ||
+                  venue.name
+              ),
+
+            city:
+              clean(
+                venue.address
+                  ?.city
+              ),
+
+            country:
+              clean(
+                venue.address
+                  ?.country
+              ),
+
+            capacity:
+              number(
+                venue.capacity
+              ),
+          }
+        : null,
+
+      referee: null,
+
+      officials: {
+        referee: null,
+        assistantReferee1:
+          null,
+        assistantReferee2:
+          null,
+        fourthOfficial:
+          null,
+        var: null,
+        avar: null,
+      },
+
+      tv,
+
+      mvp: null,
+
+      events,
+    };
+
+    return NextResponse.json(
+      response,
       {
         status: 200,
-
         headers: {
           "Cache-Control":
             "s-maxage=15, stale-while-revalidate=30",
@@ -1431,27 +996,19 @@ export async function GET(request) {
     );
   } catch (error) {
     console.error(
-      "MATCH API CRASH:",
+      "MATCH API ERROR:",
       error
     );
 
     return NextResponse.json(
       {
         success: false,
-
         source: "ESPN",
-
         error:
-          "Errore interno durante il recupero della partita.",
-
+          "Errore durante il recupero della partita.",
         details:
-          process.env.NODE_ENV ===
-          "development"
-            ? String(
-                error?.message ||
-                  error
-              )
-            : undefined,
+          error?.message ||
+          "Errore sconosciuto",
       },
       { status: 500 }
     );
