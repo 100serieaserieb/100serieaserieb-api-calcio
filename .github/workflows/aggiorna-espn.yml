@@ -1,15 +1,123 @@
-name: Aggiornamento ESPN
+const https = require("https");
 
-on:
-  schedule:
-    - cron: '*/5 * * * *'
-  workflow_dispatch:
+function getJSON(url) {
+  return new Promise((resolve, reject) => {
+    https.get(
+      url,
+      {
+        headers: {
+          "User-Agent": "Mozilla/5.0"
+        }
+      },
+      (response) => {
+        let data = "";
 
-jobs:
-  aggiorna:
-    runs-on: ubuntu-latest
+        response.on("data", (chunk) => {
+          data += chunk;
+        });
 
-    steps:
-      - name: Chiama API Vercel
-        run: |
-          curl -f -X GET "https://100serieaserieb-api-calcio.vercel.app/api/aggiorna-espn"
+        response.on("end", () => {
+          if (response.statusCode < 200 || response.statusCode >= 300) {
+            return reject(
+              new Error(`ESPN ha restituito HTTP ${response.statusCode}`)
+            );
+          }
+
+          try {
+            resolve(JSON.parse(data));
+          } catch (error) {
+            reject(new Error("Risposta ESPN non valida"));
+          }
+        });
+      }
+    ).on("error", reject);
+  });
+}
+
+module.exports = async (req, res) => {
+  try {
+    const url =
+      "https://site.api.espn.com/apis/site/v2/sports/soccer/ita.1/scoreboard";
+
+    const data = await getJSON(url);
+
+    const eventi = Array.isArray(data.events) ? data.events : [];
+
+    const partite = eventi.map((evento) => {
+      const competizione = evento.competitions?.[0];
+      const concorrenti = competizione?.competitors || [];
+
+      const casa = concorrenti.find(
+        (squadra) => squadra.homeAway === "home"
+      );
+
+      const trasferta = concorrenti.find(
+        (squadra) => squadra.homeAway === "away"
+      );
+
+      return {
+        id: evento.id,
+
+        data: evento.date || null,
+
+        nome: evento.name || null,
+
+        partita: {
+          casa: {
+            id: casa?.team?.id || null,
+            nome: casa?.team?.displayName || null,
+            abbreviazione: casa?.team?.abbreviation || null,
+            logo: casa?.team?.logo || null,
+            gol: casa?.score ?? "0"
+          },
+
+          trasferta: {
+            id: trasferta?.team?.id || null,
+            nome: trasferta?.team?.displayName || null,
+            abbreviazione: trasferta?.team?.abbreviation || null,
+            logo: trasferta?.team?.logo || null,
+            gol: trasferta?.score ?? "0"
+          },
+
+          stato: {
+            stato: competizione?.status?.type?.state || null,
+
+            descrizione:
+              competizione?.status?.type?.shortDetail ||
+              competizione?.status?.type?.description ||
+              null,
+
+            dettaglio:
+              competizione?.status?.type?.detail || null,
+
+            completata:
+              competizione?.status?.type?.completed || false
+          }
+        }
+      };
+    });
+
+    return res.status(200).json({
+      success: true,
+      fonte: "ESPN",
+      fusoOrario: "Europe/Rome",
+
+      aggiornamento: {
+        riuscito: true,
+        data: new Date().toISOString(),
+        numeroPartite: partite.length
+      },
+
+      partite
+    });
+  } catch (error) {
+    console.error("Errore aggiornamento ESPN:", error);
+
+    return res.status(500).json({
+      success: false,
+      fonte: "ESPN",
+      messaggio: "Errore durante l'aggiornamento dei dati ESPN",
+      errore: error.message
+    });
+  }
+};
