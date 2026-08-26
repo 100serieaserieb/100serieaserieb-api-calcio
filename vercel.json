@@ -1,10 +1,11 @@
 {
   "version": 2,
+  "functions": {
+    "api/sync-to-base44.js": {
+      "maxDuration": 60
+    }
+  },
   "crons": [
-    {
-      "path": "/api/aggiorna-espn",
-      "schedule": "* * * * *"
-    },
     {
       "path": "/api/sync-to-base44",
       "schedule": "*/3 * * * *"
