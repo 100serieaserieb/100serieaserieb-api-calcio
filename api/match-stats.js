@@ -1,697 +1,674 @@
-// api/match-stats.js
-// Endpoint statistiche, formazioni, rose e allenatori
-// 100%SerieA&SerieB
-//
-// Esempio:
-// /api/match-stats?competition=serie-a&id=401874745
+const https = require("https");
 
-export default async function handler(req, res) {
+const { getCompetition } = require("../lib/competitions");
+
+function richiesta(url) {
+  return new Promise((resolve, reject) => {
+    https
+      .get(
+        url,
+        {
+          headers: {
+            "User-Agent": "Mozilla/5.0",
+            Accept: "application/json",
+          },
+        },
+        (res) => {
+          let dati = "";
+
+          res.on("data", (chunk) => {
+            dati += chunk;
+          });
+
+          res.on("end", () => {
+            if (res.statusCode < 200 || res.statusCode >= 300) {
+              return reject(
+                new Error(`ESPN HTTP ${res.statusCode}`)
+              );
+            }
+
+            try {
+              resolve(JSON.parse(dati));
+            } catch (errore) {
+              reject(
+                new Error("Risposta ESPN non valida")
+              );
+            }
+          });
+        }
+      )
+      .on("error", reject);
+  });
+}
+
+/* =========================================================
+   TRADUZIONE POSIZIONI
+========================================================= */
+
+function traduciPosizione(posizione) {
+  if (!posizione) {
+    return "Non specificata";
+  }
+
+  const posizioni = {
+    Goalkeeper: "Portiere",
+    "Center Back": "Difensore centrale",
+    "Center Left Defender": "Difensore centrale sinistro",
+    "Center Right Defender": "Difensore centrale destro",
+    "Left Back": "Terzino sinistro",
+    "Right Back": "Terzino destro",
+
+    "Left Midfielder": "Centrocampista sinistro",
+    "Right Midfielder": "Centrocampista destro",
+    "Center Left Midfielder": "Centrocampista sinistro",
+    "Center Right Midfielder": "Centrocampista destro",
+    "Central Midfielder": "Centrocampista centrale",
+
+    "Attacking Midfielder": "Trequartista",
+    "Attacking Midfielder Left": "Trequartista sinistro",
+    "Attacking Midfielder Right": "Trequartista destro",
+
+    "Left Forward": "Attaccante sinistro",
+    "Right Forward": "Attaccante destro",
+    "Center Left Forward": "Attaccante sinistro",
+    "Center Right Forward": "Attaccante destro",
+
+    Striker: "Attaccante",
+    Forward: "Attaccante",
+
+    Goalkeeper: "Portiere",
+
+    Attaccante: "Attaccante",
+    Portiere: "Portiere",
+    Riserva: "Riserva",
+  };
+
+  return posizioni[posizione] || posizione;
+}
+
+/* =========================================================
+   TRADUZIONE STATISTICHE
+========================================================= */
+
+function traduciStatistica(nome) {
+  const traduzioni = {
+    appearances: "Presenze",
+    foulsCommitted: "Falli commessi",
+    foulsSuffered: "Falli subiti",
+    ownGoals: "Autogol",
+    redCards: "Cartellini rossi",
+    yellowCards: "Cartellini gialli",
+    subIns: "Entrate dalla panchina",
+    goalsConceded: "Gol subiti",
+    saves: "Parate",
+    shotsFaced: "Tiri subiti",
+    goalAssists: "Assist",
+    offsides: "Fuorigioco",
+    shotsOnTarget: "Tiri nello specchio",
+    totalGoals: "Gol",
+    totalShots: "Tiri",
+    minutesPlayed: "Minuti",
+    touches: "Tocchi",
+    passes: "Passaggi",
+    accuratePasses: "Passaggi riusciti",
+    possessionPct: "Possesso %",
+    tackles: "Contrasti",
+    interceptions: "Intercetti",
+    blocks: "Blocchi",
+    clearances: "Disimpegni",
+  };
+
+  return traduzioni[nome] || nome;
+}
+
+function traduciStatistiche(statistiche) {
+  const risultato = {};
+
+  if (!statistiche) {
+    return risultato;
+  }
+
+  for (const [chiave, valore] of Object.entries(statistiche)) {
+    risultato[traduciStatistica(chiave)] = valore;
+  }
+
+  return risultato;
+}
+
+/* =========================================================
+   GIOCATORE
+========================================================= */
+
+function preparaGiocatore(atleta, titolare = false) {
+  const nome =
+    atleta?.athlete?.displayName ||
+    atleta?.athlete?.fullName ||
+    atleta?.displayName ||
+    atleta?.fullName ||
+    "Giocatore sconosciuto";
+
+  const numero =
+    atleta?.jersey ??
+    atleta?.athlete?.jersey ??
+    null;
+
+  const posizione =
+    atleta?.position?.name ||
+    atleta?.athlete?.position?.name ||
+    atleta?.position?.displayName ||
+    atleta?.athlete?.position?.displayName ||
+    null;
+
+  const statistiche = {};
+
+  if (Array.isArray(atleta?.statistics)) {
+    for (const gruppo of atleta.statistics) {
+      if (!Array.isArray(gruppo?.stats)) {
+        continue;
+      }
+
+      for (const stat of gruppo.stats) {
+        if (stat?.name) {
+          statistiche[stat.name] = stat.value;
+        }
+      }
+    }
+  }
+
+  return {
+    id: String(
+      atleta?.athlete?.id ||
+      atleta?.id ||
+      ""
+    ),
+
+    nome,
+
+    numero:
+      numero !== null
+        ? String(numero)
+        : null,
+
+    posizione: titolare
+      ? traduciPosizione(posizione)
+      : "Riserva",
+
+    titolare,
+
+    entrato:
+      Boolean(atleta?.subbedIn),
+
+    uscito:
+      Boolean(atleta?.subbedOut),
+
+    minuti:
+      atleta?.minutesPlayed ??
+      atleta?.stats?.minutesPlayed ??
+      null,
+
+    statistiche:
+      traduciStatistiche(statistiche),
+  };
+}
+
+/* =========================================================
+   FORMAZIONE
+========================================================= */
+
+function estraiFormazione(roster, squadra) {
+  const titolari = [];
+  const riserve = [];
+
+  if (!roster) {
+    return {
+      squadra,
+      modulo: null,
+      allenatore: null,
+      titolari,
+      riserve,
+      totaleGiocatori: 0,
+    };
+  }
+
+  const formazione =
+    roster.formations ||
+    roster.formation ||
+    null;
+
+  const modulo =
+    formazione?.formation ||
+    formazione?.displayName ||
+    null;
+
+  let allenatore = null;
+
+  if (
+    Array.isArray(roster.coaches) &&
+    roster.coaches.length > 0
+  ) {
+    const coach = roster.coaches[0];
+
+    allenatore =
+      coach?.coach?.displayName ||
+      coach?.displayName ||
+      coach?.fullName ||
+      null;
+  }
+
+  const atleti =
+    roster.roster ||
+    roster.athletes ||
+    [];
+
+  if (Array.isArray(atleti)) {
+    for (const atleta of atleti) {
+      const titolare =
+        atleta?.starter === true ||
+        atleta?.starter === "true";
+
+      const giocatore =
+        preparaGiocatore(
+          atleta,
+          titolare
+        );
+
+      if (titolare) {
+        titolari.push(giocatore);
+      } else {
+        riserve.push(giocatore);
+      }
+    }
+  }
+
+  return {
+    squadra,
+    modulo,
+    allenatore,
+    titolari,
+    riserve,
+    totaleGiocatori:
+      titolari.length +
+      riserve.length,
+  };
+}
+
+/* =========================================================
+   EVENTI DELLA PARTITA
+========================================================= */
+
+function estraiEventi(dati) {
+  const eventi =
+    dati?.plays ||
+    dati?.keyEvents ||
+    [];
+
+  if (!Array.isArray(eventi)) {
+    return [];
+  }
+
+  return eventi.map((evento) => ({
+    id:
+      evento?.id ||
+      null,
+
+    tipo:
+      evento?.type?.text ||
+      evento?.type?.name ||
+      evento?.type?.id ||
+      null,
+
+    minuto:
+      evento?.clock?.displayValue ||
+      evento?.clock?.value ||
+      null,
+
+    periodo:
+      evento?.period?.number ||
+      null,
+
+    descrizione:
+      evento?.text ||
+      evento?.shortText ||
+      null,
+
+    giocatore:
+      evento?.participants?.[0]?.athlete?.displayName ||
+      evento?.athlete?.displayName ||
+      null,
+
+    squadra:
+      evento?.team?.displayName ||
+      null,
+  }));
+}
+
+/* =========================================================
+   MAIN
+========================================================= */
+
+module.exports = async (req, res) => {
   try {
-    const { competition = "serie-a", id } = req.query;
-
-    if (!id) {
-      return res.status(400).json({
+    if (req.method !== "GET") {
+      return res.status(405).json({
         success: false,
-        error: "Parametro 'id' mancante"
+        error: "Metodo non consentito",
       });
     }
 
-    const competitionMap = {
-      "serie-a": "ita.1",
-      "serie-b": "ita.2"
-    };
+    const competitionId =
+      req.query?.competition;
 
-    const espnLeague = competitionMap[String(competition).toLowerCase()];
+    const eventId =
+      req.query?.id ||
+      req.query?.event;
 
-    if (!espnLeague) {
+    if (!competitionId) {
       return res.status(400).json({
         success: false,
-        error: "Competizione non supportata",
-        competizioniSupportate: ["serie-a", "serie-b"]
+        error:
+          "Parametro competition obbligatorio",
+      });
+    }
+
+    if (!eventId) {
+      return res.status(400).json({
+        success: false,
+        error:
+          "Parametro id obbligatorio",
+      });
+    }
+
+    const competition =
+      getCompetition(
+        competitionId
+      );
+
+    if (!competition) {
+      return res.status(404).json({
+        success: false,
+        error:
+          "Competizione non trovata",
+      });
+    }
+
+    if (!competition.espnLeague) {
+      return res.status(400).json({
+        success: false,
+        error:
+          "Codice ESPN della competizione non configurato",
       });
     }
 
     const url =
-      `https://site.api.espn.com/apis/site/v2/sports/soccer/${espnLeague}/summary?event=${encodeURIComponent(id)}`;
+      `https://site.api.espn.com/apis/site/v2/sports/soccer/${competition.espnLeague}/summary?event=${encodeURIComponent(
+        eventId
+      )}`;
 
-    const response = await fetch(url);
+    const dati =
+      await richiesta(url);
 
-    if (!response.ok) {
-      return res.status(response.status).json({
+    const competizione =
+      dati?.header?.competitions?.[0];
+
+    if (!competizione) {
+      return res.status(404).json({
         success: false,
-        error: "ESPN ha restituito un errore",
-        status: response.status
+        error:
+          "Partita non trovata",
       });
     }
 
-    const data = await response.json();
+    const concorrenti =
+      competizione?.competitors || [];
 
-    const header = data.header || {};
-    const competitionData =
-      header.competitions && header.competitions.length
-        ? header.competitions[0]
-        : {};
-
-    const competitors = competitionData.competitors || [];
-
-    const homeCompetitor =
-      competitors.find(c => c.homeAway === "home") || {};
-
-    const awayCompetitor =
-      competitors.find(c => c.homeAway === "away") || {};
-
-    // ---------------------------------------------------------
-    // FUNZIONI DI SUPPORTO
-    // ---------------------------------------------------------
-
-    function safeString(value, fallback = null) {
-      if (value === undefined || value === null) {
-        return fallback;
-      }
-
-      const text = String(value).trim();
-
-      return text.length ? text : fallback;
-    }
-
-    function numberOrString(value) {
-      if (value === undefined || value === null) {
-        return null;
-      }
-
-      return value;
-    }
-
-    function getTeamName(competitor) {
-      return (
-        competitor.team?.displayName ||
-        competitor.team?.shortDisplayName ||
-        competitor.team?.name ||
-        null
+    const casa =
+      concorrenti.find(
+        (squadra) =>
+          squadra.homeAway === "home"
       );
-    }
 
-    function getTeamLogo(competitor) {
-      return (
-        competitor.team?.logo ||
-        competitor.team?.logos?.[0]?.href ||
-        null
+    const trasferta =
+      concorrenti.find(
+        (squadra) =>
+          squadra.homeAway === "away"
       );
-    }
 
-    function getTeamId(competitor) {
-      return competitor.team?.id || null;
-    }
+    const nomeCasa =
+      casa?.team?.displayName ||
+      casa?.team?.name ||
+      "Squadra casa";
 
-    function getScore(competitor) {
-      return competitor.score ?? null;
-    }
+    const nomeTrasferta =
+      trasferta?.team?.displayName ||
+      trasferta?.team?.name ||
+      "Squadra trasferta";
 
-    function translatePosition(position) {
-      if (!position) return null;
+    /* =====================================================
+       ROSTER
+    ===================================================== */
 
-      const value = String(position).toLowerCase();
+    const roster =
+      dati?.roster ||
+      dati?.boxscore?.players ||
+      [];
 
-      const positions = {
-        goalkeeper: "Portiere",
-        goalkeepers: "Portiere",
-        keeper: "Portiere",
+    let formazioneCasa = null;
+    let formazioneTrasferta = null;
 
-        defender: "Difensore",
-        defenders: "Difensore",
-        back: "Difensore",
+    if (Array.isArray(roster)) {
+      for (const squadra of roster) {
+        const nome =
+          squadra?.team?.displayName ||
+          squadra?.team?.name ||
+          "";
 
-        midfielder: "Centrocampista",
-        midfielders: "Centrocampista",
-        midfielder_left: "Centrocampista",
-        midfielder_right: "Centrocampista",
+        const id =
+          String(
+            squadra?.team?.id ||
+            ""
+          );
 
-        forward: "Attaccante",
-        forwards: "Attaccante",
-        striker: "Attaccante",
-        attacker: "Attaccante",
+        if (
+          id ===
+          String(casa?.team?.id || "")
+          ||
+          nome === nomeCasa
+        ) {
+          formazioneCasa =
+            estraiFormazione(
+              squadra,
+              nomeCasa
+            );
+        }
 
-        substitute: "Riserva"
-      };
-
-      return positions[value] || position;
-    }
-
-    function translateStatName(name) {
-      if (!name) return name;
-
-      const dictionary = {
-        possession: "Possesso palla",
-        possessionPct: "Possesso palla",
-
-        shots: "Tiri",
-        shotsOnTarget: "Tiri nello specchio",
-        shotsOffTarget: "Tiri fuori",
-        blockedShots: "Tiri respinti",
-
-        corners: "Calci d'angolo",
-        fouls: "Falli",
-        offsides: "Fuorigioco",
-
-        saves: "Parate",
-        tackles: "Contrasti",
-        interceptions: "Intercetti",
-        clearances: "Spazzate",
-
-        passes: "Passaggi",
-        passingPct: "Percentuale passaggi",
-        crosses: "Cross",
-
-        yellowCards: "Cartellini gialli",
-        redCards: "Cartellini rossi",
-
-        totalPasses: "Passaggi totali",
-        accuratePasses: "Passaggi completati",
-
-        goals: "Gol",
-        assists: "Assist",
-
-        minutesPlayed: "Minuti giocati"
-      };
-
-      return dictionary[name] || name;
-    }
-
-    function extractStatValue(stat) {
-      if (!stat) return null;
-
-      if (stat.displayValue !== undefined) {
-        return stat.displayValue;
-      }
-
-      if (stat.value !== undefined) {
-        return stat.value;
-      }
-
-      if (stat.displayValue === 0 || stat.value === 0) {
-        return 0;
-      }
-
-      return null;
-    }
-
-    // ---------------------------------------------------------
-    // FORMAZIONI ESPN
-    // ---------------------------------------------------------
-
-    function getFormationFromCompetitor(competitor) {
-      return (
-        competitor.formations?.[0]?.formation ||
-        competitor.formation ||
-        null
-      );
-    }
-
-    // ---------------------------------------------------------
-    // ROSE / TITOLARI / RISERVE
-    // ---------------------------------------------------------
-
-    function normalizePlayer(player, isStarter = false) {
-      const athlete = player.athlete || player;
-
-      const fullName =
-        athlete.displayName ||
-        athlete.fullName ||
-        athlete.shortName ||
-        player.displayName ||
-        player.fullName ||
-        null;
-
-      const jersey =
-        player.jersey ||
-        athlete.jersey ||
-        null;
-
-      const position =
-        player.position?.displayName ||
-        player.position?.name ||
-        athlete.position?.displayName ||
-        athlete.position?.name ||
-        null;
-
-      const stats = {};
-
-      const playerStats =
-        player.statistics ||
-        player.stats ||
-        [];
-
-      if (Array.isArray(playerStats)) {
-        for (const stat of playerStats) {
-          const name =
-            stat.name ||
-            stat.displayName ||
-            stat.label;
-
-          if (!name) continue;
-
-          stats[translateStatName(name)] =
-            extractStatValue(stat);
+        if (
+          id ===
+          String(
+            trasferta?.team?.id ||
+            ""
+          )
+          ||
+          nome === nomeTrasferta
+        ) {
+          formazioneTrasferta =
+            estraiFormazione(
+              squadra,
+              nomeTrasferta
+            );
         }
       }
-
-      return {
-        id: athlete.id || player.id || null,
-        nome: fullName,
-        numero: jersey,
-        posizione: translatePosition(position),
-        titolare: Boolean(isStarter),
-        entrato: player.subbedIn === true || player.entered === true,
-        uscito: player.subbedOut === true || player.exited === true,
-        minuti: player.minutesPlayed ?? null,
-        statistiche: stats
-      };
     }
 
-    function extractRoster(teamId, isHome) {
-      const rosters = Array.isArray(data.rosters)
-        ? data.rosters
-        : [];
-
-      let roster = rosters.find(r => {
-        const id =
-          r.team?.id ||
-          r.teamId ||
-          r.team?.uid;
-
-        return String(id) === String(teamId);
-      });
-
-      if (!roster) {
-        roster = rosters[isHome ? 0 : 1] || {};
-      }
-
-      const athletes =
-        roster.roster ||
-        roster.athletes ||
-        roster.players ||
-        [];
-
-      const titolari = [];
-      const riserve = [];
-
-      for (const player of athletes) {
-        const starter =
-          player.starter === true ||
-          player.starter === "true" ||
-          player.isStarter === true;
-
-        const normalized = normalizePlayer(player, starter);
-
-        if (starter) {
-          titolari.push(normalized);
-        } else {
-          riserve.push(normalized);
-        }
-      }
-
-      return {
-        titolari,
-        riserve,
-        giocatori: athletes.length
-      };
-    }
-
-    // ---------------------------------------------------------
-    // ALLENATORI
-    // ---------------------------------------------------------
-
-    function extractCoach(teamId, isHome) {
-      const coaches = Array.isArray(data.coaches)
-        ? data.coaches
-        : [];
-
-      let coach = coaches.find(c => {
-        const id =
-          c.team?.id ||
-          c.teamId ||
-          c.team?.uid;
-
-        return String(id) === String(teamId);
-      });
-
-      if (!coach) {
-        coach = coaches[isHome ? 0 : 1] || null;
-      }
-
-      if (!coach) {
-        return null;
-      }
-
-      const athlete = coach.athlete || coach;
-
-      return {
-        id: athlete.id || coach.id || null,
-        nome:
-          athlete.displayName ||
-          athlete.fullName ||
-          athlete.shortName ||
+    if (!formazioneCasa) {
+      formazioneCasa =
+        estraiFormazione(
           null,
-        ruolo: "Allenatore"
-      };
+          nomeCasa
+        );
     }
 
-    // ---------------------------------------------------------
-    // STATISTICHE DI SQUADRA
-    // ---------------------------------------------------------
-
-    function extractTeamStats(teamId, isHome) {
-      const boxscore = data.boxscore || {};
-
-      const teams = Array.isArray(boxscore.teams)
-        ? boxscore.teams
-        : [];
-
-      let teamBox = teams.find(t => {
-        const id =
-          t.team?.id ||
-          t.teamId ||
-          t.team?.uid;
-
-        return String(id) === String(teamId);
-      });
-
-      if (!teamBox) {
-        teamBox = teams[isHome ? 0 : 1] || {};
-      }
-
-      const statistics = {};
-
-      const statsArray =
-        teamBox.statistics ||
-        teamBox.stats ||
-        [];
-
-      if (Array.isArray(statsArray)) {
-        for (const stat of statsArray) {
-          const name =
-            stat.name ||
-            stat.displayName ||
-            stat.label;
-
-          if (!name) continue;
-
-          statistics[translateStatName(name)] =
-            extractStatValue(stat);
-        }
-      }
-
-      // Alcuni dati possono arrivare direttamente dal competitor
-      if (
-        statistics["Possesso palla"] === null ||
-        statistics["Possesso palla"] === undefined
-      ) {
-        const possession =
-          competitionData.competitors?.find(c => {
-            const id = c.team?.id;
-            return String(id) === String(teamId);
-          })?.possession;
-
-        if (possession !== undefined) {
-          statistics["Possesso palla"] =
-            `${possession}%`;
-        }
-      }
-
-      return statistics;
+    if (!formazioneTrasferta) {
+      formazioneTrasferta =
+        estraiFormazione(
+          null,
+          nomeTrasferta
+        );
     }
 
-    // ---------------------------------------------------------
-    // STATISTICHE INDIVIDUALI
-    // ---------------------------------------------------------
+    /* =====================================================
+       DATA PARTITA
+    ===================================================== */
 
-    function extractPlayerStats(teamId, isHome) {
-      const boxscore = data.boxscore || {};
+    const dataPartita =
+      dati?.header?.competitions?.[0]?.date ||
+      null;
 
-      const players = Array.isArray(boxscore.players)
-        ? boxscore.players
-        : [];
+    /* =====================================================
+       RISPOSTA
+    ===================================================== */
 
-      let teamPlayers = players.find(p => {
-        const id =
-          p.team?.id ||
-          p.teamId;
-
-        return String(id) === String(teamId);
-      });
-
-      if (!teamPlayers) {
-        teamPlayers = players[isHome ? 0 : 1] || {};
-      }
-
-      const groups =
-        teamPlayers.statistics ||
-        teamPlayers.groups ||
-        [];
-
-      const result = [];
-
-      if (!Array.isArray(groups)) {
-        return result;
-      }
-
-      for (const group of groups) {
-        const athletes =
-          group.athletes ||
-          group.players ||
-          [];
-
-        if (!Array.isArray(athletes)) continue;
-
-        for (const item of athletes) {
-          const athlete =
-            item.athlete ||
-            item.player ||
-            {};
-
-          const stats = {};
-
-          const labels =
-            group.labels ||
-            group.names ||
-            [];
-
-          const values =
-            item.statistics ||
-            item.stats ||
-            [];
-
-          values.forEach((value, index) => {
-            const label =
-              labels[index] ||
-              `Statistica ${index + 1}`;
-
-            stats[translateStatName(label)] = value;
-          });
-
-          result.push({
-            id: athlete.id || item.id || null,
-            nome:
-              athlete.displayName ||
-              athlete.fullName ||
-              athlete.shortName ||
-              null,
-            numero:
-              item.jersey ||
-              athlete.jersey ||
-              null,
-            gruppo:
-              group.displayName ||
-              group.name ||
-              null,
-            statistiche: stats
-          });
-        }
-      }
-
-      return result;
-    }
-
-    // ---------------------------------------------------------
-    // DATI SQUADRE
-    // ---------------------------------------------------------
-
-    const homeTeamId = getTeamId(homeCompetitor);
-    const awayTeamId = getTeamId(awayCompetitor);
-
-    const homeRoster =
-      extractRoster(homeTeamId, true);
-
-    const awayRoster =
-      extractRoster(awayTeamId, false);
-
-    const homeCoach =
-      extractCoach(homeTeamId, true);
-
-    const awayCoach =
-      extractCoach(awayTeamId, false);
-
-    const homeTeamStats =
-      extractTeamStats(homeTeamId, true);
-
-    const awayTeamStats =
-      extractTeamStats(homeTeamId, false);
-
-    const homePlayerStats =
-      extractPlayerStats(homeTeamId, true);
-
-    const awayPlayerStats =
-      extractPlayerStats(awayTeamId, false);
-
-    // ---------------------------------------------------------
-    // RISPOSTA FINALE
-    // ---------------------------------------------------------
+    res.setHeader(
+      "Cache-Control",
+      "s-maxage=15, stale-while-revalidate=30"
+    );
 
     return res.status(200).json({
       success: true,
 
       fonte: "ESPN",
-      fusoOrario: "Europe/Rome",
+
+      timezone:
+        "Europe/Rome",
 
       competizione: {
-        id: competition,
+        id:
+          competition.id,
+
         nome:
-          competition === "serie-b"
-            ? "Serie B"
-            : "Serie A",
-        campionatoESPN: espnLeague
+          competition.name,
+
+        espnLeague:
+          competition.espnLeague,
       },
 
       partita: {
-        id: String(id),
+        id:
+          String(eventId),
+
+        data:
+          dataPartita,
 
         casa: {
-          id: homeTeamId,
-          nome: getTeamName(homeCompetitor),
-          abbreviazione:
-            homeCompetitor.team?.abbreviation ||
+          id:
+            casa?.team?.id ||
             null,
-          logo: getTeamLogo(homeCompetitor),
-          gol: getScore(homeCompetitor)
+
+          nome:
+            nomeCasa,
+
+          logo:
+            casa?.team?.logo ||
+            casa?.team?.logos?.[0]?.href ||
+            null,
+
+          gol:
+            casa?.score ??
+            "0",
         },
 
         trasferta: {
-          id: awayTeamId,
-          nome: getTeamName(awayCompetitor),
-          abbreviazione:
-            awayCompetitor.team?.abbreviation ||
+          id:
+            trasferta?.team?.id ||
             null,
-          logo: getTeamLogo(awayCompetitor),
-          gol: getScore(awayCompetitor)
+
+          nome:
+            nomeTrasferta,
+
+          logo:
+            trasferta?.team?.logo ||
+            trasferta?.team?.logos?.[0]?.href ||
+            null,
+
+          gol:
+            trasferta?.score ??
+            "0",
         },
 
-        stato: {
-          stato:
-            competitionData.status?.type?.state ||
+        status: {
+          state:
+            dati?.header?.competitions?.[0]?.status?.type?.state ||
             null,
 
-          descrizione:
-            competitionData.status?.type?.description ||
+          description:
+            dati?.header?.competitions?.[0]?.status?.type?.description ||
             null,
 
-          dettaglio:
-            competitionData.status?.type?.shortDetail ||
-            competitionData.status?.type?.detail ||
+          detail:
+            dati?.header?.competitions?.[0]?.status?.type?.detail ||
             null,
 
-          completata:
-            competitionData.status?.type?.completed === true
-        }
+          completed:
+            dati?.header?.competitions?.[0]?.status?.type?.completed ||
+            false,
+        },
       },
 
       formazioni: {
-        casa: {
-          squadra: getTeamName(homeCompetitor),
-          modulo: getFormationFromCompetitor(homeCompetitor),
+        casa:
+          formazioneCasa,
 
-          allenatore: homeCoach,
-
-          titolari: homeRoster.titolari,
-
-          riserve: homeRoster.riserve,
-
-          totaleGiocatori:
-            homeRoster.giocatori
-        },
-
-        trasferta: {
-          squadra: getTeamName(awayCompetitor),
-          modulo: getFormationFromCompetitor(awayCompetitor),
-
-          allenatore: awayCoach,
-
-          titolari: awayRoster.titolari,
-
-          riserve: awayRoster.riserve,
-
-          totaleGiocatori:
-            awayRoster.giocatori
-        }
+        trasferta:
+          formazioneTrasferta,
       },
 
-      statistiche: {
-        squadre: {
-          casa: homeTeamStats,
-          trasferta: awayTeamStats
-        },
-
-        giocatori: {
-          casa: homePlayerStats,
-          trasferta: awayPlayerStats
-        }
-      },
+      eventi:
+        estraiEventi(dati),
 
       riepilogo: {
-        formazioneCasa:
-          getFormationFromCompetitor(homeCompetitor),
-
-        formazioneTrasferta:
-          getFormationFromCompetitor(awayCompetitor),
-
         titolariCasa:
-          homeRoster.titolari.length,
+          formazioneCasa.titolari.length,
 
         titolariTrasferta:
-          awayRoster.titolari.length,
+          formazioneTrasferta.titolari.length,
 
         riserveCasa:
-          homeRoster.riserve.length,
+          formazioneCasa.riserve.length,
 
         riserveTrasferta:
-          awayRoster.riserve.length,
-
-        statisticheSquadraCasa:
-          Object.keys(homeTeamStats).length,
-
-        statisticheSquadraTrasferta:
-          Object.keys(awayTeamStats).length,
-
-        statisticheGiocatoriCasa:
-          homePlayerStats.length,
-
-        statisticheGiocatoriTrasferta:
-          awayPlayerStats.length,
+          formazioneTrasferta.riserve.length,
 
         allenatoreCasa:
-          Boolean(homeCoach),
+          Boolean(
+            formazioneCasa.allenatore
+          ),
 
         allenatoreTrasferta:
-          Boolean(awayCoach)
-      }
+          Boolean(
+            formazioneTrasferta.allenatore
+          ),
+      },
+
+      messaggio:
+        "MatchStats ESPN completato",
     });
 
-  } catch (error) {
-    console.error("Errore /api/match-stats:", error);
+  } catch (errore) {
+    console.error(
+      "MATCHSTATS ESPN ERROR:",
+      errore
+    );
 
     return res.status(500).json({
       success: false,
-      error: "Errore interno dell'API",
-      messaggio: error?.message || "Errore sconosciuto"
+
+      fonte: "ESPN",
+
+      error:
+        "Errore durante il recupero delle statistiche della partita",
+
+      dettaglio:
+        errore?.message ||
+        "Errore sconosciuto",
     });
   }
-                         }
+};
