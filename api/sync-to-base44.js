@@ -1,9 +1,7 @@
-```js
 import { createClient } from "@base44/sdk";
 
 const API_BASE = "https://100serieaserieb-api-calcio.vercel.app/api";
 
-// Mappatura competizioni API -> entità Base44
 const COMPETITIONS = [
   { api: "serie-a", entity: "Match", competition: "serie_a" },
   { api: "serie-b", entity: "Match", competition: "serie_b" },
@@ -14,13 +12,19 @@ const COMPETITIONS = [
   { api: "italia", entity: "NazionaleMatch", competition: null },
 ];
 
-// ---------- helpers ----------
-function convertDate(d) {
-  if (!d) return null;
-  const parts = d.split("/");
+function convertDate(date) {
+  if (!date) return null;
+
+  const parts = String(date).split("/");
+
   if (parts.length !== 3) return null;
+
   const [day, month, year] = parts;
-  return `${year}-${month.padStart(2, "0")}-${day.padStart(2, "0")}`;
+
+  return `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(
+    2,
+    "0"
+  )}`;
 }
 
 function mapStatus(state) {
@@ -29,277 +33,140 @@ function mapStatus(state) {
   return "scheduled";
 }
 
-function parseScore(s) {
-  if (s == null || s === "-" || s === "") return null;
-  const n = parseInt(String(s), 10);
-  return isNaN(n) ? null : n;
-}
-
-function parseMinute(val) {
-  if (val == null) return 0;
-  if (typeof val === "number") return val;
-  if (typeof val === "object") {
-    if (typeof val.value === "number") return Math.floor(val.value);
-    if (val.display) return parseInt(String(val.display).replace(/\D/g, "").split("+")[0], 10) || 0;
-  }
-  if (typeof val === "string") return parseInt(val.replace(/\D/g, "").split("+")[0], 10) || 0;
-  return 0;
-}
-
-function getAthleteName(item) {
-  const a = item.athlete || item.scorer || item.player || item;
-  if (typeof a === "string") return a.trim();
-  const name = a?.displayName || a?.name || a?.shortName || "";
-  return String(name).trim();
-}
-
-function surnameOf(fullName) {
-  if (!fullName) return "";
-  const parts = fullName.trim().split(/\s+/);
-  return parts[parts.length - 1];
-}
-
-function detectSide(item, homeName, awayName) {
-  const team = item.team || item.side;
-  if (typeof team === "string") {
-    const t = team.toLowerCase();
-    if (t.includes("home")) return "home";
-    if (t.includes("away")) return "away";
-    if (homeName && t === homeName.toLowerCase()) return "home";
-    if (awayName && t === awayName.toLowerCase()) return "away";
-  }
-  if (team && typeof team === "object") {
-    const name = team.name || team.displayName || "";
-    const n = String(name).toLowerCase();
-    if (homeName && n === homeName.toLowerCase()) return "home";
-    if (awayName && n === awayName.toLowerCase()) return "away";
-  }
-  return "home";
-}
-
-function isOwnGoal(item) {
-  const t = item.type;
-  if (typeof t === "string") return /own/i.test(t);
-  if (t && typeof t === "object") {
-    const name = t.name || t.displayName || "";
-    return /own/i.test(String(name));
-  }
-  return false;
-}
-
-function isRedCard(item) {
-  const c = item.card || item.type || item.color;
-  if (typeof c === "string") return /red/i.test(c);
-  if (c && typeof c === "object") {
-    const name = c.name || c.displayName || "";
-    return /red/i.test(String(name));
-  }
-  return false;
-}
-
-function normalizeMinute(m) {
-  if (m == null) return "0";
-  if (typeof m === "number") return String(m);
-  const s = String(m).replace(/'/g, "").trim();
-  return s || "0";
-}
-
-function minOf(s) {
-  const base = String(s ?? "").split("+")[0].replace(/\D/g, "");
-  return parseInt(base, 10) || 0;
-}
-
-const EVENT_TYPE_MAP = {
-  "Inizio primo tempo": "inizio",
-  "Inizio secondo tempo": "inizio_secondo_tempo",
-  "Fine primo tempo": "fine_primo_tempo",
-  "Fine secondo tempo": "fine",
-  "Fine partita": "fine",
-  "Gol": "gol",
-  "Autogol": "gol",
-  "Cartellino giallo": "cartellino_giallo",
-  "Cartellino rosso": "cartellino_rosso",
-  "Sostituzione": "sostituzione",
-  "Interruzione": "interruzione",
-  "Ripresa del gioco": "ripresa",
-  "Rigore": "rigore",
-  "Rigore sbagliato": "rigore_sbagliato",
-  "Var": "var",
-};
-
-// Costruisce la cronaca eventi (match_events) dalla timeline completa dell'API
-function buildTimelinePayload(detail, homeName, awayName) {
-  const events = Array.isArray(detail.events) ? detail.events : [];
-  const mapped = events
-    .map((e) => {
-      const minute = normalizeMinute(e.minute);
-      const type = EVENT_TYPE_MAP[e.type] || "altro";
-      const side = e.team ? detectSide({ team: e.team }, homeName, awayName) : "neutral";
-      const text = String(e.text || "").trim();
-      if (!text) return null;
-      let subtext = "";
-      if (e.type === "Gol" && e.assist) subtext = `Assist di ${e.assist}`;
-      return { minute, type, side, text, subtext };
-    })
-    .filter(Boolean);
-  mapped.sort((a, b) => minOf(a.minute) - minOf(b.minute));
-  return mapped.length ? { match_events: JSON.stringify(mapped) } : {};
-}
-
-// ---------- payload dal match detail (marcatori, espulsi, arbitri, stadio, MVP, rigori) ----------
-function buildDetailPayload(detail, homeName, awayName) {
-  const p = {};
-  const venue = detail.venue;
-  if (venue && venue.name) p.stadium = venue.name;
-
-  const homeScorers = [];
-  const awayScorers = [];
-  if (Array.isArray(detail.goals)) {
-    for (const g of detail.goals) {
-      try {
-        const minute = parseMinute(g.clock ?? g.minute ?? g.time);
-        const fullName = getAthleteName(g);
-        const surname = surnameOf(fullName) || fullName;
-        const side = detectSide(g, homeName, awayName);
-        const own = isOwnGoal(g);
-        const entry = `${minute || ""} ${surname}`.trim();
-        if (!entry) continue;
-        if (own) {
-          if (side === "home") awayScorers.push(entry);
-          else homeScorers.push(entry);
-        } else {
-          if (side === "home") homeScorers.push(entry);
-          else awayScorers.push(entry);
-        }
-      } catch {}
-    }
-  }
-  if (homeScorers.length) p.home_scorers = homeScorers.join("\n");
-  if (awayScorers.length) p.away_scorers = awayScorers.join("\n");
-
-  const homeRed = [];
-  const awayRed = [];
-  if (Array.isArray(detail.cards)) {
-    for (const c of detail.cards) {
-      try {
-        if (!isRedCard(c)) continue;
-        const minute = parseMinute(c.clock ?? c.minute ?? c.time);
-        const fullName = getAthleteName(c);
-        const surname = surnameOf(fullName) || fullName;
-        const side = detectSide(c, homeName, awayName);
-        const entry = `${minute || ""} ${surname}`.trim();
-        if (!entry) continue;
-        if (side === "home") homeRed.push(entry);
-        else awayRed.push(entry);
-      } catch {}
-    }
-  }
-  if (homeRed.length) p.home_red_cards = JSON.stringify(homeRed);
-  if (awayRed.length) p.away_red_cards = JSON.stringify(awayRed);
-
-  if (Array.isArray(detail.officials) && detail.officials.length) {
-    const offMap = {};
-    const idxMap = ["referee", "assistant_referee_1", "assistant_referee_2", "fourth_official", "var_referee", "avar_referee"];
-    detail.officials.forEach((o, i) => {
-      const name = String(o.displayName || o.name || "").trim();
-      if (!name) return;
-      const role = String(o.role || o.position || "").toLowerCase();
-      if (/avar/.test(role)) offMap.avar_referee = name;
-      else if (/var/.test(role)) offMap.var_referee = name;
-      else if (/fourth|quarto/.test(role)) offMap.fourth_official = name;
-      else if (/assistant.*2|linesman.*2|2.*assist/.test(role)) offMap.assistant_referee_2 = name;
-      else if (/assistant.*1|linesman.*1|1.*assist/.test(role)) offMap.assistant_referee_1 = name;
-      else if (/referee|arbitro/.test(role)) offMap.referee = name;
-      else if (i < idxMap.length && !offMap[idxMap[i]]) offMap[idxMap[i]] = name;
-    });
-    Object.assign(p, offMap);
+function parseScore(score) {
+  if (
+    score === null ||
+    score === undefined ||
+    score === "" ||
+    score === "-"
+  ) {
+    return null;
   }
 
-  if (detail.mvp) {
-    const mvpName = typeof detail.mvp === "string" ? detail.mvp : String(detail.mvp.displayName || detail.mvp.name || "");
-    if (mvpName) p.mvp = mvpName;
-  }
+  const value = parseInt(String(score), 10);
 
-  if (detail.penalties) {
-    const hp = detail.penalties.home;
-    const ap = detail.penalties.away;
-    if (Array.isArray(hp) && Array.isArray(ap) && (hp.length || ap.length)) {
-      p.finish_type = "dcr";
-      p.home_pen_score = hp.filter((x) => x === true || x?.scored === true || x?.scored === "scored").length;
-      p.away_pen_score = ap.filter((x) => x === true || x?.scored === true || x?.scored === "scored").length;
-    }
-  }
-
-  // Cronaca eventi: gol, cartellini (gialli e rossi), sostituzioni
-  Object.assign(p, buildTimelinePayload(detail, homeName, awayName));
-
-  return p;
-}
-
-// ---------- payload dal match-stats (formazioni, modulo, allenatore) ----------
-function buildStatsPayload(stats) {
-  const p = {};
-  const form = stats.formazioni || {};
-  const casa = form.casa || {};
-  const trasferta = form.trasferta || {};
-
-  if (casa.modulo) p.home_lineup_module = casa.modulo;
-  if (trasferta.modulo) p.away_lineup_module = trasferta.modulo;
-  if (casa.allenatore) p.home_coach = casa.allenatore;
-  if (trasferta.allenatore) p.away_coach = trasferta.allenatore;
-
-  const buildPlayers = (side) => {
-    const titolari = Array.isArray(side.titolari) ? side.titolari.map((x) => x.nome).filter(Boolean) : [];
-    const riserve = Array.isArray(side.riserve) ? side.riserve.map((x) => x.nome).filter(Boolean) : [];
-    const all = [...titolari, ...riserve];
-    return all.length ? all.join("\n") : null;
-  };
-  const homePlayers = buildPlayers(casa);
-  const awayPlayers = buildPlayers(trasferta);
-  if (homePlayers) p.home_lineup_players = homePlayers;
-  if (awayPlayers) p.away_lineup_players = awayPlayers;
-  return p;
+  return Number.isNaN(value) ? null : value;
 }
 
 async function fetchJson(url) {
-  try {
-    const res = await fetch(url);
-    if (!res.ok) return null;
-    return await res.json();
-  } catch {
-    return null;
+  const response = await fetch(url);
+
+  if (!response.ok) {
+    throw new Error(`HTTP ${response.status} - ${url}`);
   }
+
+  return response.json();
 }
 
-// ---------- main ----------
-export default async function handler(req, res) {
-  const stats = { competitions: 0, fetched: 0, created: 0, updated: 0, details: 0, errors: 0 };
+function getErrorMessage(error) {
+  if (!error) return "Errore sconosciuto";
 
-  let base44;
-  try {
-    base44 = createClient({ appId: process.env.BASE44_APP_ID });
-    await base44.auth.loginViaEmailPassword(process.env.BASE44_ADMIN_EMAIL, process.env.BASE44_ADMIN_PASSWORD);
-  } catch (e) {
-    return res.status(500).json({ success: false, error: "Auth fallita: " + String(e?.message || e) });
+  return (
+    error?.message ||
+    error?.response?.data?.message ||
+    error?.response?.data?.error ||
+    String(error)
+  );
+}
+
+export default async function handler(req, res) {
+  const startedAt = new Date().toISOString();
+
+  const stats = {
+    competitions: 0,
+    fetched: 0,
+    created: 0,
+    updated: 0,
+    details: 0,
+    errors: 0,
+  };
+
+  const errors = [];
+
+  // Controllo variabili ambiente
+  const appId = process.env.BASE44_APP_ID;
+  const email = process.env.BASE44_ADMIN_EMAIL;
+  const password = process.env.BASE44_ADMIN_PASSWORD;
+
+  if (!appId) {
+    return res.status(500).json({
+      success: false,
+      error: "BASE44_APP_ID non configurato su Vercel",
+    });
   }
 
-  for (const comp of COMPETITIONS) {
-    try {
-      const data = await fetchJson(`${API_BASE}/matches?competition=${comp.api}`);
-      if (!data || !data.success || !Array.isArray(data.matches)) continue;
-      stats.competitions++;
-      const entity = base44.entities[comp.entity];
+  if (!email) {
+    return res.status(500).json({
+      success: false,
+      error: "BASE44_ADMIN_EMAIL non configurato su Vercel",
+    });
+  }
 
-      for (const m of data.matches) {
+  if (!password) {
+    return res.status(500).json({
+      success: false,
+      error: "BASE44_ADMIN_PASSWORD non configurato su Vercel",
+    });
+  }
+
+  let base44;
+
+  // Connessione Base44
+  try {
+    base44 = createClient({
+      appId,
+    });
+
+    await base44.auth.loginViaEmailPassword(email, password);
+  } catch (error) {
+    return res.status(500).json({
+      success: false,
+      error: "Autenticazione Base44 fallita",
+      details: getErrorMessage(error),
+    });
+  }
+
+  // Sincronizzazione
+  for (const competition of COMPETITIONS) {
+    try {
+      console.log(`Sincronizzazione ${competition.api}...`);
+
+      const data = await fetchJson(
+        `${API_BASE}/matches?competition=${encodeURIComponent(
+          competition.api
+        )}`
+      );
+
+      if (!data?.success || !Array.isArray(data.matches)) {
+        throw new Error(
+          `Risposta non valida dall'API per ${competition.api}`
+        );
+      }
+
+      stats.competitions++;
+
+      const entity = base44.entities[competition.entity];
+
+      if (!entity) {
+        throw new Error(
+          `Entity Base44 non trovata: ${competition.entity}`
+        );
+      }
+
+      for (const match of data.matches) {
         try {
-          const externalId = String(m.id);
-          const homeTeam = m.home?.name || "";
-          const awayTeam = m.away?.name || "";
-          const matchDate = m.date ? convertDate(m.date) : null;
-          const matchTime = m.time || null;
-          const status = mapStatus(m.status?.state);
-          const homeScore = parseScore(m.home?.score);
-          const awayScore = parseScore(m.away?.score);
+          const externalId = String(match.id);
+
+          const homeTeam = match.home?.name || "";
+          const awayTeam = match.away?.name || "";
+
+          const matchDate = convertDate(match.date);
+          const matchTime = match.time || null;
+
+          const status = mapStatus(match.status?.state);
+
+          const homeScore = parseScore(match.home?.score);
+          const awayScore = parseScore(match.away?.score);
 
           const payload = {
             external_id: externalId,
@@ -311,60 +178,268 @@ export default async function handler(req, res) {
             home_score: homeScore,
             away_score: awayScore,
           };
-          if (comp.competition) payload.competition = comp.competition;
 
-          // Cerca esistente per external_id
-          let existing = null;
-          try {
-            const found = await entity.filter({ external_id: externalId }, "-created_date", 5);
-            if (found && found.length > 0) existing = found[0];
-          } catch {}
-
-          // Fallback: home + away + date (collega partite manuali preesistenti)
-          if (!existing && matchDate && homeTeam && awayTeam) {
-            try {
-              const found = await entity.filter({ home_team: homeTeam, away_team: awayTeam, match_date: matchDate }, "-created_date", 5);
-              if (found && found.length > 0) existing = found[0];
-            } catch {}
+          if (competition.competition) {
+            payload.competition = competition.competition;
           }
 
-          let recordId = null;
+          let existing = null;
+
+          // Ricerca tramite external_id
+          try {
+            const found = await entity.filter({
+              external_id: externalId,
+            });
+
+            if (Array.isArray(found) && found.length > 0) {
+              existing = found[0];
+            }
+          } catch (error) {
+            console.log(
+              `Ricerca external_id fallita ${externalId}:`,
+              getErrorMessage(error)
+            );
+          }
+
+          // Fallback tramite squadra + data
+          if (
+            !existing &&
+            matchDate &&
+            homeTeam &&
+            awayTeam
+          ) {
+            try {
+              const found = await entity.filter({
+                home_team: homeTeam,
+                away_team: awayTeam,
+                match_date: matchDate,
+              });
+
+              if (Array.isArray(found) && found.length > 0) {
+                existing = found[0];
+              }
+            } catch (error) {
+              console.log(
+                `Fallback ricerca fallito ${externalId}:`,
+                getErrorMessage(error)
+              );
+            }
+          }
+
           if (existing) {
             await entity.update(existing.id, payload);
-            recordId = existing.id;
             stats.updated++;
           } else {
-            const created = await entity.create(payload);
-            recordId = created?.id || null;
+            await entity.create(payload);
             stats.created++;
           }
+
           stats.fetched++;
 
-          // Dettagli solo per partite live/finite
-          if ((status === "live" || status === "finished") && recordId) {
+          // Dettagli per partite live o finite
+          if (status === "live" || status === "finished") {
             try {
-              const [detail, matchStats] = await Promise.all([
-                fetchJson(`${API_BASE}/match?competition=${comp.api}&id=${externalId}`),
-                fetchJson(`${API_BASE}/match-stats?competition=${comp.api}&id=${externalId}`),
-              ]);
+              const detail = await fetchJson(
+                `${API_BASE}/match?competition=${encodeURIComponent(
+                  competition.api
+                )}&id=${encodeURIComponent(externalId)}`
+              );
+
+              const matchStats = await fetchJson(
+                `${API_BASE}/match-stats?competition=${encodeURIComponent(
+                  competition.api
+                )}&id=${encodeURIComponent(externalId)}`
+              );
+
               const detailPayload = {};
-              if (detail && detail.success) Object.assign(detailPayload, buildDetailPayload(detail, homeTeam, awayTeam));
-              if (matchStats && matchStats.success) Object.assign(detailPayload, buildStatsPayload(matchStats));
-              if (Object.keys(detailPayload).length > 0) {
-                await entity.update(recordId, detailPayload);
-                stats.details++;
+
+              if (detail?.success) {
+                if (detail.venue?.name) {
+                  detailPayload.stadium = detail.venue.name;
+                }
+
+                if (Array.isArray(detail.goals)) {
+                  const homeScorers = [];
+                  const awayScorers = [];
+
+                  for (const goal of detail.goals) {
+                    const name =
+                      goal.athlete?.displayName ||
+                      goal.scorer?.displayName ||
+                      goal.player?.displayName ||
+                      goal.athlete?.name ||
+                      goal.scorer?.name ||
+                      goal.player?.name ||
+                      "";
+
+                    if (!name) continue;
+
+                    const parts = String(name).trim().split(/\s+/);
+                    const surname = parts[parts.length - 1];
+
+                    const minute =
+                      goal.clock ??
+                      goal.minute ??
+                      goal.time ??
+                      "";
+
+                    const side =
+                      String(
+                        goal.team ||
+                          goal.side ||
+                          ""
+                      ).toLowerCase();
+
+                    const entry = `${minute} ${surname}`.trim();
+
+                    if (
+                      side.includes("away") ||
+                      side === awayTeam.toLowerCase()
+                    ) {
+                      awayScorers.push(entry);
+                    } else {
+                      homeScorers.push(entry);
+                    }
+                  }
+
+                  if (homeScorers.length) {
+                    detailPayload.home_scorers =
+                      homeScorers.join("\n");
+                  }
+
+                  if (awayScorers.length) {
+                    detailPayload.away_scorers =
+                      awayScorers.join("\n");
+                  }
+                }
+
+                if (detail.mvp) {
+                  detailPayload.mvp =
+                    typeof detail.mvp === "string"
+                      ? detail.mvp
+                      : detail.mvp.displayName ||
+                        detail.mvp.name ||
+                        "";
+                }
               }
-            } catch {}
+
+              if (matchStats?.success) {
+                const formations =
+                  matchStats.formazioni || {};
+
+                const home =
+                  formations.casa || {};
+
+                const away =
+                  formations.trasferta || {};
+
+                if (home.modulo) {
+                  detailPayload.home_lineup_module =
+                    home.modulo;
+                }
+
+                if (away.modulo) {
+                  detailPayload.away_lineup_module =
+                    away.modulo;
+                }
+
+                if (home.allenatore) {
+                  detailPayload.home_coach =
+                    home.allenatore;
+                }
+
+                if (away.allenatore) {
+                  detailPayload.away_coach =
+                    away.allenatore;
+                }
+
+                const getPlayers = (team) => {
+                  const starters = Array.isArray(team.titolari)
+                    ? team.titolari
+                    : [];
+
+                  const substitutes = Array.isArray(team.riserve)
+                    ? team.riserve
+                    : [];
+
+                  return [...starters, ...substitutes]
+                    .map((player) => player?.nome)
+                    .filter(Boolean)
+                    .join("\n");
+                };
+
+                const homePlayers = getPlayers(home);
+                const awayPlayers = getPlayers(away);
+
+                if (homePlayers) {
+                  detailPayload.home_lineup_players =
+                    homePlayers;
+                }
+
+                if (awayPlayers) {
+                  detailPayload.away_lineup_players =
+                    awayPlayers;
+                }
+              }
+
+              if (Object.keys(detailPayload).length > 0) {
+                let record = null;
+
+                const found = await entity.filter({
+                  external_id: externalId,
+                });
+
+                if (Array.isArray(found) && found.length) {
+                  record = found[0];
+                }
+
+                if (record) {
+                  await entity.update(
+                    record.id,
+                    detailPayload
+                  );
+
+                  stats.details++;
+                }
+              }
+            } catch (error) {
+              stats.errors++;
+
+              errors.push({
+                competition: competition.api,
+                match: externalId,
+                type: "details",
+                error: getErrorMessage(error),
+              });
+            }
           }
-        } catch {
+        } catch (error) {
           stats.errors++;
+
+          errors.push({
+            competition: competition.api,
+            match: String(match?.id || "unknown"),
+            type: "match",
+            error: getErrorMessage(error),
+          });
         }
       }
-    } catch {
+    } catch (error) {
       stats.errors++;
+
+      errors.push({
+        competition: competition.api,
+        type: "competition",
+        error: getErrorMessage(error),
+      });
     }
   }
 
-  return res.status(200).json({ success: true, stats });
+  return res.status(200).json({
+    success: true,
+    started_at: startedAt,
+    finished_at: new Date().toISOString(),
+    stats,
+    errors,
+  });
 }
-```
