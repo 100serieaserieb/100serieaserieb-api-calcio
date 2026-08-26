@@ -1,7 +1,9 @@
+```js
 import { createClient } from "@base44/sdk";
 
 const API_BASE = "https://100serieaserieb-api-calcio.vercel.app/api";
 
+// Mappatura competizioni API -> entità Base44
 const COMPETITIONS = [
   { api: "serie-a", entity: "Match", competition: "serie_a" },
   { api: "serie-b", entity: "Match", competition: "serie_b" },
@@ -12,6 +14,7 @@ const COMPETITIONS = [
   { api: "italia", entity: "NazionaleMatch", competition: null },
 ];
 
+// ---------- helpers ----------
 function convertDate(d) {
   if (!d) return null;
   const parts = d.split("/");
@@ -45,6 +48,7 @@ function parseMinute(val) {
 
 function getAthleteName(item) {
   const a = item.athlete || item.scorer || item.player || item;
+  if (typeof a === "string") return a.trim();
   const name = a?.displayName || a?.name || a?.shortName || "";
   return String(name).trim();
 }
@@ -57,7 +61,6 @@ function surnameOf(fullName) {
 
 function detectSide(item, homeName, awayName) {
   const team = item.team || item.side;
-
   if (typeof team === "string") {
     const t = team.toLowerCase();
     if (t.includes("home")) return "home";
@@ -65,14 +68,12 @@ function detectSide(item, homeName, awayName) {
     if (homeName && t === homeName.toLowerCase()) return "home";
     if (awayName && t === awayName.toLowerCase()) return "away";
   }
-
   if (team && typeof team === "object") {
     const name = team.name || team.displayName || "";
     const n = String(name).toLowerCase();
     if (homeName && n === homeName.toLowerCase()) return "home";
     if (awayName && n === awayName.toLowerCase()) return "away";
   }
-
   return "home";
 }
 
@@ -96,15 +97,63 @@ function isRedCard(item) {
   return false;
 }
 
+function normalizeMinute(m) {
+  if (m == null) return "0";
+  if (typeof m === "number") return String(m);
+  const s = String(m).replace(/'/g, "").trim();
+  return s || "0";
+}
+
+function minOf(s) {
+  const base = String(s ?? "").split("+")[0].replace(/\D/g, "");
+  return parseInt(base, 10) || 0;
+}
+
+const EVENT_TYPE_MAP = {
+  "Inizio primo tempo": "inizio",
+  "Inizio secondo tempo": "inizio_secondo_tempo",
+  "Fine primo tempo": "fine_primo_tempo",
+  "Fine secondo tempo": "fine",
+  "Fine partita": "fine",
+  "Gol": "gol",
+  "Autogol": "gol",
+  "Cartellino giallo": "cartellino_giallo",
+  "Cartellino rosso": "cartellino_rosso",
+  "Sostituzione": "sostituzione",
+  "Interruzione": "interruzione",
+  "Ripresa del gioco": "ripresa",
+  "Rigore": "rigore",
+  "Rigore sbagliato": "rigore_sbagliato",
+  "Var": "var",
+};
+
+// Costruisce la cronaca eventi (match_events) dalla timeline completa dell'API
+function buildTimelinePayload(detail, homeName, awayName) {
+  const events = Array.isArray(detail.events) ? detail.events : [];
+  const mapped = events
+    .map((e) => {
+      const minute = normalizeMinute(e.minute);
+      const type = EVENT_TYPE_MAP[e.type] || "altro";
+      const side = e.team ? detectSide({ team: e.team }, homeName, awayName) : "neutral";
+      const text = String(e.text || "").trim();
+      if (!text) return null;
+      let subtext = "";
+      if (e.type === "Gol" && e.assist) subtext = `Assist di ${e.assist}`;
+      return { minute, type, side, text, subtext };
+    })
+    .filter(Boolean);
+  mapped.sort((a, b) => minOf(a.minute) - minOf(b.minute));
+  return mapped.length ? { match_events: JSON.stringify(mapped) } : {};
+}
+
+// ---------- payload dal match detail (marcatori, espulsi, arbitri, stadio, MVP, rigori) ----------
 function buildDetailPayload(detail, homeName, awayName) {
   const p = {};
   const venue = detail.venue;
-
   if (venue && venue.name) p.stadium = venue.name;
 
   const homeScorers = [];
   const awayScorers = [];
-
   if (Array.isArray(detail.goals)) {
     for (const g of detail.goals) {
       try {
@@ -114,9 +163,7 @@ function buildDetailPayload(detail, homeName, awayName) {
         const side = detectSide(g, homeName, awayName);
         const own = isOwnGoal(g);
         const entry = `${minute || ""} ${surname}`.trim();
-
         if (!entry) continue;
-
         if (own) {
           if (side === "home") awayScorers.push(entry);
           else homeScorers.push(entry);
@@ -127,129 +174,90 @@ function buildDetailPayload(detail, homeName, awayName) {
       } catch {}
     }
   }
-
   if (homeScorers.length) p.home_scorers = homeScorers.join("\n");
   if (awayScorers.length) p.away_scorers = awayScorers.join("\n");
 
   const homeRed = [];
   const awayRed = [];
-
   if (Array.isArray(detail.cards)) {
     for (const c of detail.cards) {
       try {
         if (!isRedCard(c)) continue;
-
         const minute = parseMinute(c.clock ?? c.minute ?? c.time);
         const fullName = getAthleteName(c);
         const surname = surnameOf(fullName) || fullName;
         const side = detectSide(c, homeName, awayName);
         const entry = `${minute || ""} ${surname}`.trim();
-
         if (!entry) continue;
-
         if (side === "home") homeRed.push(entry);
         else awayRed.push(entry);
       } catch {}
     }
   }
-
   if (homeRed.length) p.home_red_cards = JSON.stringify(homeRed);
   if (awayRed.length) p.away_red_cards = JSON.stringify(awayRed);
 
   if (Array.isArray(detail.officials) && detail.officials.length) {
     const offMap = {};
-
-    const idxMap = [
-      "referee",
-      "assistant_referee_1",
-      "assistant_referee_2",
-      "fourth_official",
-      "var_referee",
-      "avar_referee"
-    ];
-
+    const idxMap = ["referee", "assistant_referee_1", "assistant_referee_2", "fourth_official", "var_referee", "avar_referee"];
     detail.officials.forEach((o, i) => {
       const name = String(o.displayName || o.name || "").trim();
       if (!name) return;
-
       const role = String(o.role || o.position || "").toLowerCase();
-
       if (/avar/.test(role)) offMap.avar_referee = name;
       else if (/var/.test(role)) offMap.var_referee = name;
       else if (/fourth|quarto/.test(role)) offMap.fourth_official = name;
       else if (/assistant.*2|linesman.*2|2.*assist/.test(role)) offMap.assistant_referee_2 = name;
       else if (/assistant.*1|linesman.*1|1.*assist/.test(role)) offMap.assistant_referee_1 = name;
       else if (/referee|arbitro/.test(role)) offMap.referee = name;
-      else if (i < idxMap.length && !offMap[idxMap[i]]) {
-        offMap[idxMap[i]] = name;
-      }
+      else if (i < idxMap.length && !offMap[idxMap[i]]) offMap[idxMap[i]] = name;
     });
-
     Object.assign(p, offMap);
   }
 
   if (detail.mvp) {
-    const mvpName =
-      typeof detail.mvp === "string"
-        ? detail.mvp
-        : String(detail.mvp.displayName || detail.mvp.name || "");
-
+    const mvpName = typeof detail.mvp === "string" ? detail.mvp : String(detail.mvp.displayName || detail.mvp.name || "");
     if (mvpName) p.mvp = mvpName;
   }
 
   if (detail.penalties) {
     const hp = detail.penalties.home;
     const ap = detail.penalties.away;
-
     if (Array.isArray(hp) && Array.isArray(ap) && (hp.length || ap.length)) {
       p.finish_type = "dcr";
-
-      p.home_pen_score = hp.filter(
-        (x) => x === true || x?.scored === true || x?.scored === "scored"
-      ).length;
-
-      p.away_pen_score = ap.filter(
-        (x) => x === true || x?.scored === true || x?.scored === "scored"
-      ).length;
+      p.home_pen_score = hp.filter((x) => x === true || x?.scored === true || x?.scored === "scored").length;
+      p.away_pen_score = ap.filter((x) => x === true || x?.scored === true || x?.scored === "scored").length;
     }
   }
+
+  // Cronaca eventi: gol, cartellini (gialli e rossi), sostituzioni
+  Object.assign(p, buildTimelinePayload(detail, homeName, awayName));
 
   return p;
 }
 
+// ---------- payload dal match-stats (formazioni, modulo, allenatore) ----------
 function buildStatsPayload(stats) {
   const p = {};
-
   const form = stats.formazioni || {};
   const casa = form.casa || {};
   const trasferta = form.trasferta || {};
 
   if (casa.modulo) p.home_lineup_module = casa.modulo;
   if (trasferta.modulo) p.away_lineup_module = trasferta.modulo;
-
   if (casa.allenatore) p.home_coach = casa.allenatore;
   if (trasferta.allenatore) p.away_coach = trasferta.allenatore;
 
   const buildPlayers = (side) => {
-    const titolari = Array.isArray(side.titolari)
-      ? side.titolari.map((x) => x.nome).filter(Boolean)
-      : [];
-
-    const riserve = Array.isArray(side.riserve)
-      ? side.riserve.map((x) => x.nome).filter(Boolean)
-      : [];
-
+    const titolari = Array.isArray(side.titolari) ? side.titolari.map((x) => x.nome).filter(Boolean) : [];
+    const riserve = Array.isArray(side.riserve) ? side.riserve.map((x) => x.nome).filter(Boolean) : [];
     const all = [...titolari, ...riserve];
-
     return all.length ? all.join("\n") : null;
   };
-
   const homePlayers = buildPlayers(casa);
   const awayPlayers = buildPlayers(trasferta);
-
   if (homePlayers) p.home_lineup_players = homePlayers;
   if (awayPlayers) p.away_lineup_players = awayPlayers;
-
   return p;
 }
 
@@ -263,44 +271,23 @@ async function fetchJson(url) {
   }
 }
 
+// ---------- main ----------
 export default async function handler(req, res) {
-  const stats = {
-    competitions: 0,
-    fetched: 0,
-    created: 0,
-    updated: 0,
-    details: 0,
-    errors: 0
-  };
+  const stats = { competitions: 0, fetched: 0, created: 0, updated: 0, details: 0, errors: 0 };
 
   let base44;
-
   try {
-    base44 = createClient({
-      appId: process.env.BASE44_APP_ID
-    });
-
-    await base44.auth.loginViaEmailPassword(
-      process.env.BASE44_ADMIN_EMAIL,
-      process.env.BASE44_ADMIN_PASSWORD
-    );
+    base44 = createClient({ appId: process.env.BASE44_APP_ID });
+    await base44.auth.loginViaEmailPassword(process.env.BASE44_ADMIN_EMAIL, process.env.BASE44_ADMIN_PASSWORD);
   } catch (e) {
-    return res.status(500).json({
-      success: false,
-      error: "Auth fallita: " + String(e?.message || e)
-    });
+    return res.status(500).json({ success: false, error: "Auth fallita: " + String(e?.message || e) });
   }
 
   for (const comp of COMPETITIONS) {
     try {
-      const data = await fetchJson(
-        `${API_BASE}/matches?competition=${comp.api}`
-      );
-
+      const data = await fetchJson(`${API_BASE}/matches?competition=${comp.api}`);
       if (!data || !data.success || !Array.isArray(data.matches)) continue;
-
       stats.competitions++;
-
       const entity = base44.entities[comp.entity];
 
       for (const m of data.matches) {
@@ -322,47 +309,26 @@ export default async function handler(req, res) {
             match_time: matchTime,
             status,
             home_score: homeScore,
-            away_score: awayScore
+            away_score: awayScore,
           };
+          if (comp.competition) payload.competition = comp.competition;
 
-          if (comp.competition) {
-            payload.competition = comp.competition;
-          }
-
+          // Cerca esistente per external_id
           let existing = null;
-
           try {
-            const found = await entity.filter(
-              { external_id: externalId },
-              "-created_date",
-              5
-            );
-
-            if (found && found.length > 0) {
-              existing = found[0];
-            }
+            const found = await entity.filter({ external_id: externalId }, "-created_date", 5);
+            if (found && found.length > 0) existing = found[0];
           } catch {}
 
+          // Fallback: home + away + date (collega partite manuali preesistenti)
           if (!existing && matchDate && homeTeam && awayTeam) {
             try {
-              const found = await entity.filter(
-                {
-                  home_team: homeTeam,
-                  away_team: awayTeam,
-                  match_date: matchDate
-                },
-                "-created_date",
-                5
-              );
-
-              if (found && found.length > 0) {
-                existing = found[0];
-              }
+              const found = await entity.filter({ home_team: homeTeam, away_team: awayTeam, match_date: matchDate }, "-created_date", 5);
+              if (found && found.length > 0) existing = found[0];
             } catch {}
           }
 
           let recordId = null;
-
           if (existing) {
             await entity.update(existing.id, payload);
             recordId = existing.id;
@@ -372,39 +338,18 @@ export default async function handler(req, res) {
             recordId = created?.id || null;
             stats.created++;
           }
-
           stats.fetched++;
 
-          if (
-            (status === "live" || status === "finished") &&
-            recordId
-          ) {
+          // Dettagli solo per partite live/finite
+          if ((status === "live" || status === "finished") && recordId) {
             try {
               const [detail, matchStats] = await Promise.all([
-                fetchJson(
-                  `${API_BASE}/match?competition=${comp.api}&id=${externalId}`
-                ),
-                fetchJson(
-                  `${API_BASE}/match-stats?competition=${comp.api}&id=${externalId}`
-                )
+                fetchJson(`${API_BASE}/match?competition=${comp.api}&id=${externalId}`),
+                fetchJson(`${API_BASE}/match-stats?competition=${comp.api}&id=${externalId}`),
               ]);
-
               const detailPayload = {};
-
-              if (detail && detail.success) {
-                Object.assign(
-                  detailPayload,
-                  buildDetailPayload(detail, homeTeam, awayTeam)
-                );
-              }
-
-              if (matchStats && matchStats.success) {
-                Object.assign(
-                  detailPayload,
-                  buildStatsPayload(matchStats)
-                );
-              }
-
+              if (detail && detail.success) Object.assign(detailPayload, buildDetailPayload(detail, homeTeam, awayTeam));
+              if (matchStats && matchStats.success) Object.assign(detailPayload, buildStatsPayload(matchStats));
               if (Object.keys(detailPayload).length > 0) {
                 await entity.update(recordId, detailPayload);
                 stats.details++;
@@ -420,8 +365,6 @@ export default async function handler(req, res) {
     }
   }
 
-  return res.status(200).json({
-    success: true,
-    stats
-  });
-            }
+  return res.status(200).json({ success: true, stats });
+}
+```
