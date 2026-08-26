@@ -1,376 +1,515 @@
-const https = require("https");
+const {
+  getCompetition
+} = require("../lib/competitions");
 
-function richiesta(url) {
-  return new Promise((resolve, reject) => {
-    https.get(
-      url,
-      {
-        headers: {
-          "User-Agent": "Mozilla/5.0"
-        }
-      },
-      (res) => {
-        let dati = "";
+const {
+  getScoreboard
+} = require("../lib/espn");
 
-        res.on("data", (chunk) => {
-          dati += chunk;
-        });
+const {
+  normalizeTeamName
+} = require("../lib/teams");
 
-        res.on("end", () => {
-          try {
-            resolve(JSON.parse(dati));
-          } catch (errore) {
-            reject(new Error("Risposta ESPN non valida"));
-          }
-        });
-      }
-    ).on("error", reject);
+const { DateTime } = require("luxon");
+
+/* =========================================================
+   FINESTRA PARTITE
+   GIOVEDÌ → MARTEDÌ
+========================================================= */
+
+function getNextMatchWindow() {
+  const now = DateTime.now().setZone("Europe/Rome");
+
+  /*
+   * 1 = lunedì
+   * 2 = martedì
+   * 3 = mercoledì
+   * 4 = giovedì
+   * 5 = venerdì
+   * 6 = sabato
+   * 7 = domenica
+   */
+
+  let start;
+
+  if (now.weekday >= 4) {
+    /*
+     * Da giovedì a domenica:
+     * prendiamo il giovedì della settimana corrente.
+     */
+    start = now.startOf("day").minus({
+      days: now.weekday - 4
+    });
+  } else {
+    /*
+     * Lunedì, martedì e mercoledì:
+     * prendiamo il giovedì precedente.
+     */
+    start = now.startOf("day").minus({
+      days: now.weekday + 3
+    });
+  }
+
+  /*
+   * Giovedì + 5 giorni = martedì
+   */
+  const end = start.plus({
+    days: 5
   });
-}
 
-function traduciPosizione(posizione) {
-  if (!posizione) return "Non specificata";
-
-  const posizioni = {
-    "Goalkeeper": "Portiere",
-    "Center Back": "Difensore centrale",
-    "Center Left Defender": "Difensore centrale sinistro",
-    "Center Right Defender": "Difensore centrale destro",
-    "Left Back": "Terzino sinistro",
-    "Right Back": "Terzino destro",
-    "Left Midfielder": "Centrocampista sinistro",
-    "Right Midfielder": "Centrocampista destro",
-    "Center Left Midfielder": "Centrocampista sinistro",
-    "Center Right Midfielder": "Centrocampista destro",
-    "Central Midfielder": "Centrocampista centrale",
-    "Attacking Midfielder": "Trequartista",
-    "Attacking Midfielder Left": "Trequartista sinistro",
-    "Attacking Midfielder Right": "Trequartista destro",
-    "Left Forward": "Attaccante sinistro",
-    "Right Forward": "Attaccante destro",
-    "Center Left Forward": "Attaccante sinistro",
-    "Center Right Forward": "Attaccante destro",
-    "Striker": "Attaccante",
-    "Forward": "Attaccante",
-    "Attaccante": "Attaccante",
-    "Portiere": "Portiere",
-    "Riserva": "Riserva"
+  return {
+    start,
+    end
   };
-
-  return posizioni[posizione] || posizione;
 }
 
-function traduciStatistica(nome) {
-  const traduzioni = {
-    appearances: "Presenze",
-    foulsCommitted: "Falli commessi",
-    foulsSuffered: "Falli subiti",
-    ownGoals: "Autogol",
-    redCards: "Cartellini rossi",
-    yellowCards: "Cartellini gialli",
-    subIns: "Entrate dalla panchina",
-    goalsConceded: "Gol subiti",
-    saves: "Parate",
-    shotsFaced: "Tiri subiti",
-    goalAssists: "Assist",
-    offsides: "Fuorigioco",
-    shotsOnTarget: "Tiri nello specchio",
-    totalGoals: "Gol",
-    totalShots: "Tiri"
-  };
+/* =========================================================
+   DATA ESPN
+========================================================= */
 
-  return traduzioni[nome] || nome;
+function formatDateForESPN(date) {
+  return date.toFormat("yyyyMMdd");
 }
 
-function traduciStatistiche(statistiche) {
-  const risultato = {};
+/* =========================================================
+   FORMAT PARTITA
+========================================================= */
 
-  if (!statistiche) return risultato;
+function formatMatch(event, competition) {
+  const competitionInfo =
+    event.competitions?.[0];
 
-  for (const [chiave, valore] of Object.entries(statistiche)) {
-    risultato[traduciStatistica(chiave)] = valore;
+  if (!competitionInfo) {
+    return null;
   }
 
-  return risultato;
-}
+  const homeTeam =
+    competitionInfo.competitors?.find(
+      team =>
+        team.homeAway === "home"
+    );
 
-function preparaGiocatore(atleta, titolare = false) {
-  const nomeCompleto =
-    atleta?.athlete?.displayName ||
-    atleta?.athlete?.fullName ||
-    atleta?.displayName ||
-    atleta?.fullName ||
-    "Giocatore sconosciuto";
+  const awayTeam =
+    competitionInfo.competitors?.find(
+      team =>
+        team.homeAway === "away"
+    );
 
-  const numero =
-    atleta?.jersey ||
-    atleta?.athlete?.jersey ||
-    null;
+  if (!homeTeam || !awayTeam) {
+    return null;
+  }
 
-  const posizione =
-    atleta?.position?.name ||
-    atleta?.athlete?.position?.name ||
-    atleta?.position?.displayName ||
-    atleta?.athlete?.position?.displayName ||
-    null;
-
-  const statistiche = {};
-
-  if (Array.isArray(atleta?.statistics)) {
-    for (const gruppo of atleta.statistics) {
-      if (Array.isArray(gruppo.stats)) {
-        for (const stat of gruppo.stats) {
-          if (stat.name) {
-            statistiche[stat.name] = stat.value;
-          }
-        }
+  const dateTime =
+    DateTime.fromISO(
+      event.date,
+      {
+        zone: "utc"
       }
-    }
+    ).setZone("Europe/Rome");
+
+  if (!dateTime.isValid) {
+    return null;
   }
 
+  /*
+   * pre = partita non ancora iniziata
+   * in  = partita in corso
+   * post = partita terminata
+   */
+  const state =
+    event.status?.type?.state || null;
+
+  const isStarted =
+    state !== "pre";
+
   return {
-    id: String(
-      atleta?.athlete?.id ||
-      atleta?.id ||
-      ""
-    ),
-    nome: nomeCompleto,
-    numero: numero ? String(numero) : null,
-    posizione: titolare
-      ? traduciPosizione(posizione)
-      : "Riserva",
-    titolare,
-    entrato: Boolean(atleta?.subbedIn),
-    uscito: Boolean(atleta?.subbedOut),
-    minuti: atleta?.minutesPlayed || null,
-    statistiche: traduciStatistiche(statistiche)
+    id: String(event.id),
+
+    date:
+      dateTime.toFormat(
+        "dd/MM/yyyy"
+      ),
+
+    time:
+      dateTime.toFormat(
+        "HH:mm"
+      ),
+
+    timezone:
+      "Europe/Rome",
+
+    competition: {
+      id:
+        competition.id,
+
+      name:
+        competition.name
+    },
+
+    home: {
+      name:
+        normalizeTeamName(
+          homeTeam.team?.displayName ||
+          homeTeam.team?.name ||
+          "Squadra casa"
+        ),
+
+      score:
+        isStarted
+          ? (homeTeam.score ?? "-")
+          : "-",
+
+      logo:
+        homeTeam.team?.logo ||
+        homeTeam.team?.logos?.[0]?.href ||
+        null
+    },
+
+    away: {
+      name:
+        normalizeTeamName(
+          awayTeam.team?.displayName ||
+          awayTeam.team?.name ||
+          "Squadra trasferta"
+        ),
+
+      score:
+        isStarted
+          ? (awayTeam.score ?? "-")
+          : "-",
+
+      logo:
+        awayTeam.team?.logo ||
+        awayTeam.team?.logos?.[0]?.href ||
+        null
+    },
+
+    status: {
+      state,
+
+      name:
+        event.status?.type?.name ||
+        null,
+
+      description:
+        event.status?.type?.description ||
+        null,
+
+      detail:
+        event.status?.type?.detail ||
+        null,
+
+      shortDetail:
+        event.status?.type?.shortDetail ||
+        null,
+
+      clock:
+        event.status?.displayClock ||
+        null,
+
+      period:
+        event.status?.period ||
+        null,
+
+      completed:
+        event.status?.type?.completed ||
+        false
+    }
   };
 }
 
-function estraiFormazione(roster, squadra) {
-  const titolari = [];
-  const riserve = [];
+/* =========================================================
+   MAIN
+========================================================= */
 
-  if (!roster) {
-    return {
-      squadra,
-      modulo: null,
-      allenatore: null,
-      titolari,
-      riserve,
-      totaleGiocatori: 0
-    };
-  }
-
-  const formazione =
-    roster.formations ||
-    roster.formation ||
-    null;
-
-  const modulo =
-    formazione?.formation ||
-    formazione?.displayName ||
-    null;
-
-  let allenatore = null;
-
-  if (Array.isArray(roster.coaches) && roster.coaches.length > 0) {
-    const allenatoreDati = roster.coaches[0];
-
-    allenatore =
-      allenatoreDati?.coach?.displayName ||
-      allenatoreDati?.displayName ||
-      allenatoreDati?.fullName ||
-      null;
-  }
-
-  const atleti =
-    roster.roster ||
-    roster.athletes ||
-    [];
-
-  for (const atleta of atleti) {
-    const titolare =
-      atleta?.starter === true ||
-      atleta?.starter === "true";
-
-    const giocatore = preparaGiocatore(atleta, titolare);
-
-    if (titolare) {
-      titolari.push(giocatore);
-    } else {
-      riserve.push(giocatore);
-    }
-  }
-
-  return {
-    squadra,
-    modulo,
-    allenatore,
-    titolari,
-    riserve,
-    totaleGiocatori: titolari.length + riserve.length
-  };
-}
-
-module.exports = async (req, res) => {
+module.exports = async (
+  req,
+  res
+) => {
   try {
+
+    /* -----------------------------------------------------
+       METODO
+    ----------------------------------------------------- */
+
     if (req.method !== "GET") {
       return res.status(405).json({
         success: false,
-        errore: "Metodo non consentito"
+        error:
+          "Metodo non consentito"
       });
     }
 
-    /*
-     * ID della partita.
-     *
-     * Se viene passato:
-     * /api/cron/aggiorna-espn?event=401874745
-     *
-     * utilizziamo direttamente quella partita.
-     */
-    const eventId = req.query?.event || "401874745";
+    /* -----------------------------------------------------
+       PARAMETRO COMPETIZIONE
+    ----------------------------------------------------- */
 
-    const url =
-      `https://site.api.espn.com/apis/site/v2/sports/soccer/ita.1/summary?event=${eventId}`;
+    const competitionId =
+      req.query?.competition;
 
-    const dati = await richiesta(url);
+    if (!competitionId) {
+      return res.status(400).json({
+        success: false,
+        error:
+          "Parametro competition obbligatorio"
+      });
+    }
 
-    const competizione =
-      dati?.header?.competitions?.[0];
+    /* -----------------------------------------------------
+       COMPETIZIONE
+    ----------------------------------------------------- */
 
-    const concorrenti =
-      competizione?.competitors || [];
+    const competition =
+      getCompetition(
+        competitionId
+      );
 
-    const casa =
-      concorrenti.find((squadra) => squadra.homeAway === "home");
+    if (!competition) {
+      return res.status(404).json({
+        success: false,
+        error:
+          "Competizione non trovata"
+      });
+    }
 
-    const trasferta =
-      concorrenti.find((squadra) => squadra.homeAway === "away");
+    if (!competition.espnLeague) {
+      return res.status(400).json({
+        success: false,
+        error:
+          "Codice ESPN della competizione non ancora configurato"
+      });
+    }
 
-    const nomeCasa =
-      casa?.team?.displayName ||
-      casa?.team?.name ||
-      "Squadra casa";
+    /* -----------------------------------------------------
+       FINESTRA
+       GIOVEDÌ → MARTEDÌ
+    ----------------------------------------------------- */
 
-    const nomeTrasferta =
-      trasferta?.team?.displayName ||
-      trasferta?.team?.name ||
-      "Squadra trasferta";
+    const {
+      start,
+      end
+    } = getNextMatchWindow();
 
-    /*
-     * ESPN restituisce i roster nella sezione boxscore.
-     */
-    const roster =
-      dati?.roster ||
-      dati?.boxscore?.players ||
-      [];
+    /* -----------------------------------------------------
+       RICHIESTE ESPN
+    ----------------------------------------------------- */
 
-    let formazioneCasa = null;
-    let formazioneTrasferta = null;
+    const requests = [];
 
-    if (Array.isArray(roster)) {
-      for (const squadra of roster) {
-        const nome =
-          squadra?.team?.displayName ||
-          squadra?.team?.name ||
-          "";
+    let currentDate = start;
 
-        if (
-          squadra?.team?.id === casa?.team?.id ||
-          nome === nomeCasa
-        ) {
-          formazioneCasa = estraiFormazione(
-            squadra,
-            nomeCasa
+    while (
+      currentDate <= end
+    ) {
+
+      const date =
+        formatDateForESPN(
+          currentDate
+        );
+
+      /*
+       * Ogni giorno viene richiesto
+       * separatamente a ESPN.
+       *
+       * In questo modo recuperiamo:
+       *
+       * - partite terminate
+       * - partite in corso
+       * - partite future
+       */
+
+      requests.push(
+        getScoreboard(
+          competition.espnLeague,
+          date
+        )
+      );
+
+      currentDate =
+        currentDate.plus({
+          days: 1
+        });
+    }
+
+    /* -----------------------------------------------------
+       ATTENDI TUTTE LE RISPOSTE
+    ----------------------------------------------------- */
+
+    const responses =
+      await Promise.all(
+        requests
+      );
+
+    /* -----------------------------------------------------
+       ESTRAI EVENTI
+    ----------------------------------------------------- */
+
+    const events =
+      responses.flatMap(
+        response =>
+          Array.isArray(
+            response?.events
+          )
+            ? response.events
+            : []
+      );
+
+    /* -----------------------------------------------------
+       FORMATTA PARTITE
+    ----------------------------------------------------- */
+
+    const matches =
+      events
+        .map(
+          event =>
+            formatMatch(
+              event,
+              competition
+            )
+        )
+        .filter(Boolean);
+
+    /* -----------------------------------------------------
+       ELIMINA DUPLICATI
+    ----------------------------------------------------- */
+
+    const uniqueMatches =
+      Array.from(
+        new Map(
+          matches.map(
+            match => [
+              match.id,
+              match
+            ]
+          )
+        ).values()
+      );
+
+    /* -----------------------------------------------------
+       ORDINA CRONOLOGICAMENTE
+    ----------------------------------------------------- */
+
+    uniqueMatches.sort(
+      (a, b) => {
+
+        const dateA =
+          DateTime.fromFormat(
+            `${a.date} ${a.time}`,
+            "dd/MM/yyyy HH:mm",
+            {
+              zone:
+                "Europe/Rome"
+            }
           );
-        }
 
-        if (
-          squadra?.team?.id === trasferta?.team?.id ||
-          nome === nomeTrasferta
-        ) {
-          formazioneTrasferta = estraiFormazione(
-            squadra,
-            nomeTrasferta
+        const dateB =
+          DateTime.fromFormat(
+            `${b.date} ${b.time}`,
+            "dd/MM/yyyy HH:mm",
+            {
+              zone:
+                "Europe/Rome"
+            }
           );
-        }
+
+        return (
+          dateA.toMillis() -
+          dateB.toMillis()
+        );
       }
-    }
+    );
 
-    /*
-     * Se ESPN non ha ancora restituito i roster,
-     * manteniamo comunque una risposta valida.
-     */
-    if (!formazioneCasa) {
-      formazioneCasa = {
-        squadra: nomeCasa,
-        modulo: null,
-        allenatore: null,
-        titolari: [],
-        riserve: [],
-        totaleGiocatori: 0
-      };
-    }
+    /* -----------------------------------------------------
+       RISPOSTA
+    ----------------------------------------------------- */
 
-    if (!formazioneTrasferta) {
-      formazioneTrasferta = {
-        squadra: nomeTrasferta,
-        modulo: null,
-        allenatore: null,
-        titolari: [],
-        riserve: [],
-        totaleGiocatori: 0
-      };
-    }
+    res.setHeader(
+      "Cache-Control",
+      "s-maxage=15, stale-while-revalidate=30"
+    );
 
     return res.status(200).json({
+
       success: true,
-      fonte: "ESPN",
-      fusoOrario: "Europe/Rome",
 
-      partita: {
-        id: String(eventId),
-        casa: {
-          id: casa?.team?.id || null,
-          nome: nomeCasa,
-          logo: casa?.team?.logo || null,
-          gol: casa?.score || "0"
-        },
-        trasferta: {
-          id: trasferta?.team?.id || null,
-          nome: nomeTrasferta,
-          logo: trasferta?.team?.logo || null,
-          gol: trasferta?.score || "0"
-        }
+      source:
+        "ESPN",
+
+      timezone:
+        "Europe/Rome",
+
+      /*
+       * Finestra utilizzata
+       */
+      window: {
+
+        from:
+          start.toFormat(
+            "dd/MM/yyyy"
+          ),
+
+        to:
+          end.toFormat(
+            "dd/MM/yyyy"
+          )
       },
 
-      formazioni: {
-        casa: formazioneCasa,
-        trasferta: formazioneTrasferta
-      },
+      league:
+        competition.espnLeague,
 
-      riepilogo: {
-        titolariCasa: formazioneCasa.titolari.length,
-        titolariTrasferta: formazioneTrasferta.titolari.length,
-        riserveCasa: formazioneCasa.riserve.length,
-        riserveTrasferta: formazioneTrasferta.riserve.length,
-        allenatoreCasa: Boolean(formazioneCasa.allenatore),
-        allenatoreTrasferta: Boolean(formazioneTrasferta.allenatore)
-      },
+      count:
+        uniqueMatches.length,
 
-      messaggio: "Aggiornamento ESPN completato"
+      /*
+       * Tutte le partite:
+       *
+       * PRE  = future
+       * IN   = live
+       * POST = terminate
+       */
+      matches:
+        uniqueMatches
+
     });
 
-  } catch (errore) {
-    console.error("Errore aggiornamento ESPN:", errore);
+  } catch (error) {
+
+    console.error(
+      "ESPN SCOREBOARD ERROR:",
+      error
+    );
 
     return res.status(500).json({
+
       success: false,
-      fonte: "ESPN",
-      errore: "Errore durante il recupero dei dati ESPN",
-      dettaglio: errore.message
+
+      source:
+        "ESPN",
+
+      error:
+        error?.message ||
+        "Errore durante il recupero delle partite ESPN"
     });
   }
 };
+
+✅ Cosa farà adesso
+
+Se siamo nella settimana 27 agosto → 1 settembre, l'API controllerà esattamente:
+
+27/08 giovedì
+28/08 venerdì
+29/08 sabato
+30/08 domenica
+31/08 lunedì
+01/09 martedì
+
+E restituirà tutte le partite trovate da ESPN, senza eliminare quelle già terminate.
+
+Quindi, per esempio:
+
+- "pre" → ⚪ futura
+- "in" → 🔴 in corso
+- "post" → 🟢 terminata
+
+Inoltre il risultato viene ordinato automaticamente in base a data + ora italiana.
