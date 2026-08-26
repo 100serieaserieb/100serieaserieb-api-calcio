@@ -155,7 +155,6 @@ function traduciStatistica(nome) {
     totalTackles: "Contrasti totali",
     effectiveTackles: "Contrasti riusciti",
 
-    totalShots: "Tiri",
     shotsOnTarget: "Tiri nello specchio",
     shotPct: "Percentuale tiro",
 
@@ -240,10 +239,108 @@ function estraiStatisticheAtleta(atleta) {
             null;
         }
       }
+
+      if (Array.isArray(elemento?.statistics)) {
+        for (const stat of elemento.statistics) {
+          if (!stat?.name) continue;
+
+          risultato[stat.name] =
+            stat.value ??
+            stat.displayValue ??
+            null;
+        }
+      }
     }
   }
 
   return traduciStatistiche(risultato);
+}
+
+/* =========================================================
+   COGNOME GIOCATORE
+========================================================= */
+
+/*
+   IMPORTANTE
+   ---------------------------------------------------------
+   Nelle formazioni dell'API viene restituito ESCLUSIVAMENTE
+   il cognome del giocatore.
+
+   Priorità:
+   1. lastName
+   2. lastNameDisplay
+   3. familyName
+   4. surname
+   5. cognome
+   6. displayName / fullName come fallback
+
+   Questo permette di gestire anche cognomi composti
+   quando ESPN li fornisce direttamente.
+========================================================= */
+
+function estraiCognome(atleta) {
+  const datiAtleta =
+    atleta?.athlete ||
+    atleta ||
+    {};
+
+  const cognomeDiretto =
+    datiAtleta?.lastName ||
+    atleta?.lastName ||
+    datiAtleta?.lastNameDisplay ||
+    atleta?.lastNameDisplay ||
+    datiAtleta?.familyName ||
+    atleta?.familyName ||
+    datiAtleta?.surname ||
+    atleta?.surname ||
+    datiAtleta?.cognome ||
+    atleta?.cognome ||
+    null;
+
+  if (
+    cognomeDiretto !== null &&
+    cognomeDiretto !== undefined &&
+    String(cognomeDiretto).trim() !== ""
+  ) {
+    return String(cognomeDiretto).trim();
+  }
+
+  const nomeCompleto =
+    datiAtleta?.displayName ||
+    datiAtleta?.fullName ||
+    atleta?.displayName ||
+    atleta?.fullName ||
+    datiAtleta?.name ||
+    atleta?.name ||
+    "";
+
+  const testo =
+    String(nomeCompleto).trim();
+
+  if (!testo) {
+    return "Sconosciuto";
+  }
+
+  /*
+     Fallback.
+
+     Se ESPN non fornisce lastName, prendiamo l'ultima
+     parola del nome completo.
+
+     Esempio:
+     "Lautaro Martinez" -> "Martinez"
+  */
+
+  const parti =
+    testo
+      .split(/\s+/)
+      .filter(Boolean);
+
+  if (!parti.length) {
+    return "Sconosciuto";
+  }
+
+  return parti[parti.length - 1];
 }
 
 /* =========================================================
@@ -258,12 +355,8 @@ function preparaGiocatore(
     atleta?.athlete ||
     atleta;
 
-  const nome =
-    datiAtleta?.displayName ||
-    datiAtleta?.fullName ||
-    atleta?.displayName ||
-    atleta?.fullName ||
-    "Giocatore sconosciuto";
+  const cognome =
+    estraiCognome(atleta);
 
   const numero =
     atleta?.jersey ??
@@ -293,7 +386,10 @@ function preparaGiocatore(
       ""
     ),
 
-    nome,
+    /*
+       SOLO COGNOME
+    */
+    nome: cognome,
 
     numero:
       numero !== null &&
@@ -381,6 +477,7 @@ function trovaRosterSquadra(
     }
 
     if (
+      !idString &&
       teamName &&
       nome &&
       String(nome).toLowerCase() ===
@@ -475,11 +572,19 @@ function estraiFormazione(
   if (!allenatore && roster?.coach) {
     const coach = roster.coach;
 
-    allenatore =
-      coach?.displayName ||
-      coach?.fullName ||
-      coach?.name ||
-      null;
+    /*
+       Evitiamo di considerare una stringa come oggetto.
+    */
+
+    if (typeof coach === "object") {
+      allenatore =
+        coach?.displayName ||
+        coach?.fullName ||
+        coach?.name ||
+        null;
+    } else if (typeof coach === "string") {
+      allenatore = coach;
+    }
   }
 
   /* -------------------------------------------------------
@@ -494,6 +599,8 @@ function estraiFormazione(
 
   if (Array.isArray(atleti)) {
     for (const atleta of atleti) {
+      if (!atleta) continue;
+
       const titolare =
         atleta?.starter === true ||
         atleta?.starter === "true" ||
@@ -532,6 +639,7 @@ function estraiFormazione(
 /*
    Estrae un singolo valore da una statistica ESPN.
 */
+
 function valoreStatistica(stat) {
   if (!stat) return null;
 
@@ -555,6 +663,7 @@ function valoreStatistica(stat) {
 /*
    Aggiunge una statistica evitando duplicati.
 */
+
 function aggiungiStatistica(
   risultato,
   nome,
@@ -570,12 +679,6 @@ function aggiungiStatistica(
     return;
   }
 
-  /*
-     Manteniamo la prima statistica valida.
-     In questo modo un eventuale duplicato
-     proveniente da ESPN non sovrascrive
-     inutilmente il valore.
-  */
   if (
     risultato[nome] === undefined ||
     risultato[nome] === null
@@ -585,9 +688,10 @@ function aggiungiStatistica(
 }
 
 /*
-   Estrae ricorsivamente le statistiche da
-   una struttura ESPN conosciuta.
+   Estrae ricorsivamente le statistiche
+   da una struttura ESPN conosciuta.
 */
+
 function estraiArrayStatistiche(
   array,
   risultato
@@ -599,12 +703,14 @@ function estraiArrayStatistiche(
 
     /*
        Caso:
+
        {
          name: "totalShots",
          value: 10,
          displayValue: "10"
        }
     */
+
     if (elemento.name) {
       const valore =
         valoreStatistica(elemento);
@@ -620,11 +726,13 @@ function estraiArrayStatistiche(
 
     /*
        Caso:
+
        {
          name: "...",
          statistics: [...]
        }
     */
+
     if (Array.isArray(elemento.statistics)) {
       estraiArrayStatistiche(
         elemento.statistics,
@@ -634,10 +742,12 @@ function estraiArrayStatistiche(
 
     /*
        Caso:
+
        {
          stats: [...]
        }
     */
+
     if (Array.isArray(elemento.stats)) {
       estraiArrayStatistiche(
         elemento.stats,
@@ -671,9 +781,6 @@ function estraiStatisticheSquadra(
      - statistiche generiche della partita
 
      e non le copiamo sull'altra squadra.
-
-     Questo impedisce che casa e trasferta
-     ricevano gli stessi valori.
   */
 
   const idCercato =
@@ -722,6 +829,7 @@ function estraiStatisticheSquadra(
          Il nome viene usato soltanto quando
          l'ID non è disponibile.
       */
+
       const corrisponde =
         idCercato
           ? idCoincide
@@ -743,6 +851,7 @@ function estraiStatisticheSquadra(
          Alcune versioni ESPN possono avere
          statistiche direttamente sotto il gruppo.
       */
+
       if (
         Array.isArray(
           gruppoSquadra?.stats
@@ -759,13 +868,6 @@ function estraiStatisticheSquadra(
   /* =======================================================
      2. COMPETITION -> COMPETITORS
   ======================================================= */
-
-  /*
-     Questo NON è un fallback che copia dati.
-
-     Cerchiamo esclusivamente il competitor
-     appartenente alla squadra richiesta.
-  */
 
   const competizione =
     dati?.header?.competitions?.[0];
@@ -803,6 +905,7 @@ function estraiStatisticheSquadra(
        Se ESPN ha trovato il competitor corretto,
        estraiamo SOLO le sue statistiche.
     */
+
     if (
       concorrente &&
       Array.isArray(
@@ -831,13 +934,6 @@ function estraiStatisticheSquadra(
   /* =======================================================
      3. ALTRE STRUTTURE ESPN
   ======================================================= */
-
-  /*
-     Alcune risposte possono contenere una struttura
-     statistics direttamente dentro il competitor.
-
-     Anche qui controlliamo SEMPRE l'ID.
-  */
 
   if (Array.isArray(concorrenti)) {
     for (const concorrente of concorrenti) {
@@ -1008,12 +1104,20 @@ function estraiEventi(dati) {
 
 module.exports = async (req, res) => {
   try {
+    /* =====================================================
+       METODO
+    ===================================================== */
+
     if (req.method !== "GET") {
       return res.status(405).json({
         success: false,
         error: "Metodo non consentito",
       });
     }
+
+    /* =====================================================
+       PARAMETRI
+    ===================================================== */
 
     const competitionId =
       req.query?.competition;
@@ -1037,6 +1141,10 @@ module.exports = async (req, res) => {
           "Parametro id obbligatorio",
       });
     }
+
+    /* =====================================================
+       COMPETIZIONE
+    ===================================================== */
 
     const competition =
       getCompetition(
@@ -1109,6 +1217,10 @@ module.exports = async (req, res) => {
       });
     }
 
+    /* =====================================================
+       DATI SQUADRE
+    ===================================================== */
+
     const nomeCasa =
       casa?.team?.displayName ||
       casa?.team?.name ||
@@ -1144,6 +1256,10 @@ module.exports = async (req, res) => {
         idTrasferta,
         nomeTrasferta
       );
+
+    /* =====================================================
+       FORMAZIONI
+    ===================================================== */
 
     const formazioneCasa =
       estraiFormazione(
@@ -1191,9 +1307,7 @@ module.exports = async (req, res) => {
        NON modifichiamo i dati.
 
        Le statistiche uguali possono essere realmente
-       uguali (es. cartellini rossi = 0, falli = 10 ecc.).
-
-       Vengono solamente riportate nel debug.
+       uguali.
     */
 
     /* =====================================================
@@ -1334,6 +1448,14 @@ module.exports = async (req, res) => {
         },
       },
 
+      /* ===================================================
+         FORMAZIONI
+
+         ATTENZIONE:
+         Il campo "nome" dei giocatori contiene
+         esclusivamente il cognome.
+      =================================================== */
+
       formazioni: {
         casa:
           formazioneCasa,
@@ -1341,6 +1463,10 @@ module.exports = async (req, res) => {
         trasferta:
           formazioneTrasferta,
       },
+
+      /* ===================================================
+         STATISTICHE
+      =================================================== */
 
       statistiche: {
         squadre: {
@@ -1360,7 +1486,15 @@ module.exports = async (req, res) => {
         },
       },
 
+      /* ===================================================
+         EVENTI
+      =================================================== */
+
       eventi,
+
+      /* ===================================================
+         RIEPILOGO
+      =================================================== */
 
       riepilogo: {
         formazioneCasa:
@@ -1391,14 +1525,6 @@ module.exports = async (req, res) => {
             statisticheTrasferta
           ).length,
 
-        /*
-           Elenco delle statistiche che hanno
-           casualmente lo stesso valore per entrambe
-           le squadre.
-
-           NON significa che siano sbagliate:
-           ad esempio entrambe possono avere 2 cartellini.
-        */ 
         statisticheConValoreUguale:
           statisticheUguali,
 
