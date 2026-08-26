@@ -1,35 +1,90 @@
-const {
-  getCompetition
-} = require("../lib/competitions");
+const https = require("https");
 
-const {
-  getMatchSummary
-} = require("../lib/espn");
+const { getCompetition } = require("../lib/competitions");
 
 /* =========================================================
-   TRADUZIONE POSIZIONI
+   RICHIESTA ESPN
+========================================================= */
+
+function richiesta(url) {
+  return new Promise((resolve, reject) => {
+    const req = https.get(
+      url,
+      {
+        headers: {
+          "User-Agent": "Mozilla/5.0",
+          Accept: "application/json",
+        },
+      },
+      (res) => {
+        let dati = "";
+
+        res.on("data", (chunk) => {
+          dati += chunk;
+        });
+
+        res.on("end", () => {
+          if (res.statusCode < 200 || res.statusCode >= 300) {
+            return reject(
+              new Error(`ESPN HTTP ${res.statusCode}`)
+            );
+          }
+
+          try {
+            resolve(JSON.parse(dati));
+          } catch (errore) {
+            reject(
+              new Error("Risposta ESPN non valida")
+            );
+          }
+        });
+      }
+    );
+
+    req.on("error", reject);
+
+    req.setTimeout(15000, () => {
+      req.destroy();
+      reject(new Error("Timeout richiesta ESPN"));
+    });
+  });
+}
+
+/* =========================================================
+   POSIZIONI
 ========================================================= */
 
 function traduciPosizione(posizione) {
-  if (!posizione) {
-    return "Non specificata";
-  }
+  if (!posizione) return "Non specificata";
+
+  const p = String(posizione).trim();
 
   const posizioni = {
     Goalkeeper: "Portiere",
+    GoalkeeperCenter: "Portiere",
 
+    Defender: "Difensore",
     "Center Back": "Difensore centrale",
+    "Center Defender": "Difensore centrale",
     "Center Left Defender": "Difensore centrale sinistro",
     "Center Right Defender": "Difensore centrale destro",
 
     "Left Back": "Terzino sinistro",
     "Right Back": "Terzino destro",
 
-    "Left Midfielder": "Centrocampista sinistro",
-    "Right Midfielder": "Centrocampista destro",
+    "Left Wing Back": "Esterno sinistro",
+    "Right Wing Back": "Esterno destro",
+
+    "Defensive Midfielder": "Centrocampista difensivo",
+    "Center Defensive Midfielder": "Centrocampista difensivo",
+
+    "Central Midfielder": "Centrocampista centrale",
+    "Center Midfielder": "Centrocampista centrale",
     "Center Left Midfielder": "Centrocampista sinistro",
     "Center Right Midfielder": "Centrocampista destro",
-    "Central Midfielder": "Centrocampista centrale",
+
+    "Left Midfielder": "Centrocampista sinistro",
+    "Right Midfielder": "Centrocampista destro",
 
     "Attacking Midfielder": "Trequartista",
     "Attacking Midfielder Left": "Trequartista sinistro",
@@ -40,19 +95,19 @@ function traduciPosizione(posizione) {
     "Center Left Forward": "Attaccante sinistro",
     "Center Right Forward": "Attaccante destro",
 
-    Striker: "Attaccante",
     Forward: "Attaccante",
+    Striker: "Attaccante",
 
     Attaccante: "Attaccante",
     Portiere: "Portiere",
-    Riserva: "Riserva"
+    Riserva: "Riserva",
   };
 
-  return posizioni[posizione] || posizione;
+  return posizioni[p] || p;
 }
 
 /* =========================================================
-   TRADUZIONE STATISTICHE
+   STATISTICHE
 ========================================================= */
 
 function traduciStatistica(nome) {
@@ -68,9 +123,10 @@ function traduciStatistica(nome) {
     saves: "Parate",
     shotsFaced: "Tiri subiti",
     goalAssists: "Assist",
+    assists: "Assist",
     offsides: "Fuorigioco",
-    shotsOnTarget: "Tiri nello specchio",
     totalGoals: "Gol",
+    goals: "Gol",
     totalShots: "Tiri",
     minutesPlayed: "Minuti",
     touches: "Tocchi",
@@ -80,7 +136,26 @@ function traduciStatistica(nome) {
     tackles: "Contrasti",
     interceptions: "Intercetti",
     blocks: "Blocchi",
-    clearances: "Disimpegni"
+    clearances: "Disimpegni",
+    effectiveClearance: "Disimpegni riusciti",
+    totalClearance: "Disimpegni totali",
+    totalTackles: "Contrasti totali",
+    effectiveTackles: "Contrasti riusciti",
+    totalShots: "Tiri",
+    shotsOnTarget: "Tiri nello specchio",
+    shotPct: "Percentuale tiro",
+    wonCorners: "Calci d'angolo",
+    penaltyKickGoals: "Rigori segnati",
+    penaltyKickShots: "Rigori calciati",
+    passPct: "Percentuale passaggi",
+    accurateCrosses: "Cross riusciti",
+    totalCrosses: "Cross",
+    crossPct: "Percentuale cross",
+    totalLongBalls: "Lanci lunghi",
+    accurateLongBalls: "Lanci lunghi riusciti",
+    longballPct: "Percentuale lanci lunghi",
+    fouls: "Falli",
+    possession: "Possesso %",
   };
 
   return traduzioni[nome] || nome;
@@ -89,9 +164,7 @@ function traduciStatistica(nome) {
 function traduciStatistiche(statistiche) {
   const risultato = {};
 
-  if (!statistiche) {
-    return risultato;
-  }
+  if (!statistiche) return risultato;
 
   for (const [chiave, valore] of Object.entries(statistiche)) {
     risultato[traduciStatistica(chiave)] = valore;
@@ -101,48 +174,86 @@ function traduciStatistiche(statistiche) {
 }
 
 /* =========================================================
+   EXTRAZIONE STATISTICHE ATLETA
+========================================================= */
+
+function estraiStatisticheAtleta(atleta) {
+  const risultato = {};
+
+  const gruppi = [
+    atleta?.statistics,
+    atleta?.stats,
+    atleta?.athlete?.statistics,
+    atleta?.athlete?.stats,
+  ];
+
+  for (const gruppo of gruppi) {
+    if (!Array.isArray(gruppo)) continue;
+
+    for (const elemento of gruppo) {
+      if (elemento?.name) {
+        risultato[elemento.name] =
+          elemento.value ??
+          elemento.displayValue ??
+          null;
+      }
+
+      if (Array.isArray(elemento?.stats)) {
+        for (const stat of elemento.stats) {
+          if (!stat?.name) continue;
+
+          risultato[stat.name] =
+            stat.value ??
+            stat.displayValue ??
+            null;
+        }
+      }
+    }
+  }
+
+  return traduciStatistiche(risultato);
+}
+
+/* =========================================================
    GIOCATORE
 ========================================================= */
 
 function preparaGiocatore(atleta, titolare = false) {
+  const datiAtleta =
+    atleta?.athlete ||
+    atleta;
+
   const nome =
-    atleta?.athlete?.displayName ||
-    atleta?.athlete?.fullName ||
+    datiAtleta?.displayName ||
+    datiAtleta?.fullName ||
     atleta?.displayName ||
     atleta?.fullName ||
     "Giocatore sconosciuto";
 
   const numero =
     atleta?.jersey ??
-    atleta?.athlete?.jersey ??
+    atleta?.jerseyNumber ??
+    datiAtleta?.jersey ??
+    datiAtleta?.jerseyNumber ??
     null;
 
   const posizione =
     atleta?.position?.name ||
-    atleta?.athlete?.position?.name ||
     atleta?.position?.displayName ||
-    atleta?.athlete?.position?.displayName ||
+    atleta?.position?.abbreviation ||
+    datiAtleta?.position?.name ||
+    datiAtleta?.position?.displayName ||
     null;
 
-  const statistiche = {};
-
-  if (Array.isArray(atleta?.statistics)) {
-    for (const gruppo of atleta.statistics) {
-      if (!Array.isArray(gruppo?.stats)) {
-        continue;
-      }
-
-      for (const stat of gruppo.stats) {
-        if (stat?.name) {
-          statistiche[stat.name] = stat.value;
-        }
-      }
-    }
-  }
+  const minuti =
+    atleta?.minutesPlayed ??
+    atleta?.stats?.minutesPlayed ??
+    atleta?.statistics?.minutesPlayed ??
+    null;
 
   return {
     id: String(
-      atleta?.athlete?.id ||
+      datiAtleta?.id ||
       atleta?.id ||
       ""
     ),
@@ -150,38 +261,109 @@ function preparaGiocatore(atleta, titolare = false) {
     nome,
 
     numero:
-      numero !== null
+      numero !== null &&
+      numero !== undefined
         ? String(numero)
         : null,
 
-    posizione:
-      titolare
-        ? traduciPosizione(posizione)
-        : "Riserva",
+    posizione: titolare
+      ? traduciPosizione(posizione)
+      : "Riserva",
+
+    posizioneOriginale:
+      posizione || null,
 
     titolare,
 
     entrato:
-      Boolean(atleta?.subbedIn),
+      Boolean(
+        atleta?.subbedIn ||
+        atleta?.substitutionIn
+      ),
 
     uscito:
-      Boolean(atleta?.subbedOut),
+      Boolean(
+        atleta?.subbedOut ||
+        atleta?.substitutionOut
+      ),
 
-    minuti:
-      atleta?.minutesPlayed ??
-      atleta?.stats?.minutesPlayed ??
-      null,
+    minuti,
 
     statistiche:
-      traduciStatistiche(statistiche)
+      estraiStatisticheAtleta(atleta),
   };
+}
+
+/* =========================================================
+   TROVA ROSTER DI UNA SQUADRA
+========================================================= */
+
+function trovaRosterSquadra(
+  dati,
+  teamId,
+  teamName
+) {
+  const possibili = [];
+
+  if (Array.isArray(dati?.roster)) {
+    possibili.push(...dati.roster);
+  }
+
+  if (Array.isArray(dati?.boxscore?.players)) {
+    possibili.push(...dati.boxscore.players);
+  }
+
+  if (Array.isArray(dati?.gameInfo?.roster)) {
+    possibili.push(...dati.gameInfo.roster);
+  }
+
+  const idString =
+    teamId !== null &&
+    teamId !== undefined
+      ? String(teamId)
+      : null;
+
+  for (const elemento of possibili) {
+    const id =
+      elemento?.team?.id ??
+      elemento?.teamId ??
+      elemento?.id;
+
+    const nome =
+      elemento?.team?.displayName ||
+      elemento?.team?.name ||
+      elemento?.displayName ||
+      elemento?.name ||
+      "";
+
+    if (
+      idString &&
+      String(id) === idString
+    ) {
+      return elemento;
+    }
+
+    if (
+      teamName &&
+      String(nome).toLowerCase() ===
+        String(teamName).toLowerCase()
+    ) {
+      return elemento;
+    }
+  }
+
+  return null;
 }
 
 /* =========================================================
    FORMAZIONE
 ========================================================= */
 
-function estraiFormazione(roster, squadra) {
+function estraiFormazione(
+  roster,
+  squadra,
+  datiCompleti
+) {
   const titolari = [];
   const riserve = [];
 
@@ -192,45 +374,94 @@ function estraiFormazione(roster, squadra) {
       allenatore: null,
       titolari,
       riserve,
-      totaleGiocatori: 0
+      totaleGiocatori: 0,
     };
   }
 
-  const formazione =
-    roster.formations ||
-    roster.formation ||
+  /* -------------------------------------------------------
+     MODULO
+  ------------------------------------------------------- */
+
+  let modulo =
+    roster?.formation?.displayName ||
+    roster?.formation?.name ||
+    roster?.formation?.formation ||
+    roster?.formations?.displayName ||
+    roster?.formations?.name ||
+    roster?.formations?.formation ||
     null;
 
-  const modulo =
-    formazione?.formation ||
-    formazione?.displayName ||
-    null;
+  /* Alcune risposte ESPN possono avere il modulo
+     direttamente nella lista dei giocatori */
+  if (!modulo) {
+    const atletiPossibili =
+      roster?.roster ||
+      roster?.athletes ||
+      [];
+
+    if (Array.isArray(atletiPossibili)) {
+      for (const atleta of atletiPossibili) {
+        modulo =
+          atleta?.formation?.displayName ||
+          atleta?.formation?.name ||
+          atleta?.formation?.formation ||
+          modulo;
+
+        if (modulo) break;
+      }
+    }
+  }
+
+  /* -------------------------------------------------------
+     ALLENATORE
+  ------------------------------------------------------- */
 
   let allenatore = null;
 
-  if (
-    Array.isArray(roster.coaches) &&
-    roster.coaches.length > 0
-  ) {
-    const coach = roster.coaches[0];
+  const coaches =
+    roster?.coaches ||
+    roster?.coach ||
+    [];
+
+  if (Array.isArray(coaches) && coaches.length) {
+    const coach = coaches[0];
 
     allenatore =
       coach?.coach?.displayName ||
+      coach?.coach?.fullName ||
       coach?.displayName ||
       coach?.fullName ||
+      coach?.name ||
       null;
   }
 
+  if (!allenatore && roster?.coach) {
+    const coach =
+      roster.coach;
+
+    allenatore =
+      coach?.displayName ||
+      coach?.fullName ||
+      coach?.name ||
+      null;
+  }
+
+  /* -------------------------------------------------------
+     GIOCATORI
+  ------------------------------------------------------- */
+
   const atleti =
-    roster.roster ||
-    roster.athletes ||
+    roster?.roster ||
+    roster?.athletes ||
+    roster?.players ||
     [];
 
   if (Array.isArray(atleti)) {
     for (const atleta of atleti) {
       const titolare =
         atleta?.starter === true ||
-        atleta?.starter === "true";
+        atleta?.starter === "true" ||
+        atleta?.starter === 1;
 
       const giocatore =
         preparaGiocatore(
@@ -254,8 +485,159 @@ function estraiFormazione(roster, squadra) {
     riserve,
     totaleGiocatori:
       titolari.length +
-      riserve.length
+      riserve.length,
   };
+}
+
+/* =========================================================
+   STATISTICHE SQUADRA
+========================================================= */
+
+function estraiStatisticheSquadra(
+  dati,
+  teamId,
+  teamName
+) {
+  const risultato = {};
+
+  const boxscore =
+    dati?.boxscore;
+
+  const players =
+    boxscore?.players;
+
+  if (Array.isArray(players)) {
+    for (const squadra of players) {
+      const id =
+        squadra?.team?.id;
+
+      const nome =
+        squadra?.team?.displayName ||
+        squadra?.team?.name ||
+        "";
+
+      const corrisponde =
+        (
+          teamId &&
+          String(id) === String(teamId)
+        ) ||
+        (
+          teamName &&
+          String(nome).toLowerCase() ===
+            String(teamName).toLowerCase()
+        );
+
+      if (!corrisponde) continue;
+
+      const statistics =
+        squadra?.statistics ||
+        squadra?.teamStatistics ||
+        [];
+
+      if (Array.isArray(statistics)) {
+        for (const gruppo of statistics) {
+          if (!gruppo) continue;
+
+          const stats =
+            gruppo?.statistics ||
+            gruppo?.stats ||
+            [];
+
+          if (Array.isArray(stats)) {
+            for (const stat of stats) {
+              if (!stat?.name) continue;
+
+              risultato[stat.name] =
+                stat.displayValue ??
+                stat.value ??
+                null;
+            }
+          }
+
+          if (
+            gruppo?.name &&
+            (
+              gruppo?.displayValue !== undefined ||
+              gruppo?.value !== undefined
+            )
+          ) {
+            risultato[gruppo.name] =
+              gruppo.displayValue ??
+              gruppo.value;
+          }
+        }
+      }
+    }
+  }
+
+  /* -------------------------------------------------------
+     FALLBACK: statistiche nella competition
+  ------------------------------------------------------- */
+
+  const competizione =
+    dati?.header?.competitions?.[0];
+
+  const concorrenti =
+    competizione?.competitors || [];
+
+  const concorrente =
+    concorrenti.find(
+      (c) =>
+        (
+          teamId &&
+          String(c?.team?.id) ===
+            String(teamId)
+        ) ||
+        (
+          teamName &&
+          String(
+            c?.team?.displayName ||
+            c?.team?.name ||
+            ""
+          ).toLowerCase() ===
+            String(teamName).toLowerCase()
+        )
+    );
+
+  if (
+    concorrente &&
+    Array.isArray(concorrente.statistics)
+  ) {
+    for (
+      const stat
+      of concorrente.statistics
+    ) {
+      if (!stat?.name) continue;
+
+      risultato[stat.name] =
+        stat.displayValue ??
+        stat.value ??
+        null;
+    }
+  }
+
+  return traduciStatistiche(risultato);
+}
+
+/* =========================================================
+   STATISTICHE GIOCATORI
+========================================================= */
+
+function estraiStatisticheGiocatori(
+  formazione
+) {
+  if (!formazione) return [];
+
+  return [
+    ...formazione.titolari,
+    ...formazione.riserve,
+  ].filter(
+    (giocatore) =>
+      giocatore &&
+      Object.keys(
+        giocatore.statistiche || {}
+      ).length > 0
+  );
 }
 
 /* =========================================================
@@ -266,6 +648,7 @@ function estraiEventi(dati) {
   const eventi =
     dati?.plays ||
     dati?.keyEvents ||
+    dati?.leaders ||
     [];
 
   if (!Array.isArray(eventi)) {
@@ -295,16 +678,23 @@ function estraiEventi(dati) {
     descrizione:
       evento?.text ||
       evento?.shortText ||
+      evento?.description ||
       null,
 
     giocatore:
       evento?.participants?.[0]?.athlete?.displayName ||
       evento?.athlete?.displayName ||
+      evento?.participant?.athlete?.displayName ||
+      null,
+
+    assist:
+      evento?.participants?.[1]?.athlete?.displayName ||
       null,
 
     squadra:
       evento?.team?.displayName ||
-      null
+      evento?.team?.name ||
+      null,
   }));
 }
 
@@ -314,21 +704,12 @@ function estraiEventi(dati) {
 
 module.exports = async (req, res) => {
   try {
-
-    /* -----------------------------------------------------
-       METODO
-    ----------------------------------------------------- */
-
     if (req.method !== "GET") {
       return res.status(405).json({
         success: false,
-        error: "Metodo non consentito"
+        error: "Metodo non consentito",
       });
     }
-
-    /* -----------------------------------------------------
-       PARAMETRI
-    ----------------------------------------------------- */
 
     const competitionId =
       req.query?.competition;
@@ -341,7 +722,7 @@ module.exports = async (req, res) => {
       return res.status(400).json({
         success: false,
         error:
-          "Parametro competition obbligatorio"
+          "Parametro competition obbligatorio",
       });
     }
 
@@ -349,13 +730,9 @@ module.exports = async (req, res) => {
       return res.status(400).json({
         success: false,
         error:
-          "Parametro id obbligatorio"
+          "Parametro id obbligatorio",
       });
     }
-
-    /* -----------------------------------------------------
-       COMPETIZIONE
-    ----------------------------------------------------- */
 
     const competition =
       getCompetition(
@@ -366,7 +743,7 @@ module.exports = async (req, res) => {
       return res.status(404).json({
         success: false,
         error:
-          "Competizione non trovata"
+          "Competizione non trovata",
       });
     }
 
@@ -374,38 +751,39 @@ module.exports = async (req, res) => {
       return res.status(400).json({
         success: false,
         error:
-          "Codice ESPN della competizione non configurato"
+          "Codice ESPN della competizione non configurato",
       });
     }
 
-    /* -----------------------------------------------------
-       ESPN SUMMARY
-    ----------------------------------------------------- */
+    /* =====================================================
+       URL ESPN
+    ===================================================== */
+
+    const url =
+      `https://site.api.espn.com/apis/site/v2/sports/soccer/${competition.espnLeague}/summary?event=${encodeURIComponent(
+        eventId
+      )}`;
 
     const dati =
-      await getMatchSummary(
-        competition.espnLeague,
-        eventId
-      );
+      await richiesta(url);
 
-    /* -----------------------------------------------------
-       DATI PARTITA
-    ----------------------------------------------------- */
+    /* =====================================================
+       PARTITA
+    ===================================================== */
 
-    const competitionInfo =
+    const competizioneESPN =
       dati?.header?.competitions?.[0];
 
-    if (!competitionInfo) {
+    if (!competizioneESPN) {
       return res.status(404).json({
         success: false,
         error:
-          "Partita non trovata"
+          "Partita non trovata",
       });
     }
 
     const concorrenti =
-      competitionInfo?.competitors ||
-      [];
+      competizioneESPN?.competitors || [];
 
     const casa =
       concorrenti.find(
@@ -419,6 +797,14 @@ module.exports = async (req, res) => {
           squadra?.homeAway === "away"
       );
 
+    if (!casa || !trasferta) {
+      return res.status(404).json({
+        success: false,
+        error:
+          "Squadre della partita non trovate",
+      });
+    }
+
     const nomeCasa =
       casa?.team?.displayName ||
       casa?.team?.name ||
@@ -429,98 +815,121 @@ module.exports = async (req, res) => {
       trasferta?.team?.name ||
       "Squadra trasferta";
 
-    /* -----------------------------------------------------
-       ROSTER / FORMAZIONI
-    ----------------------------------------------------- */
+    const idCasa =
+      casa?.team?.id ||
+      null;
 
-    const roster =
-      dati?.roster ||
-      dati?.boxscore?.players ||
-      [];
+    const idTrasferta =
+      trasferta?.team?.id ||
+      null;
 
-    let formazioneCasa = null;
-    let formazioneTrasferta = null;
+    /* =====================================================
+       ROSTER
+    ===================================================== */
 
-    if (Array.isArray(roster)) {
+    const rosterCasa =
+      trovaRosterSquadra(
+        dati,
+        idCasa,
+        nomeCasa
+      );
 
-      for (const squadra of roster) {
+    const rosterTrasferta =
+      trovaRosterSquadra(
+        dati,
+        idTrasferta,
+        nomeTrasferta
+      );
 
-        const nome =
-          squadra?.team?.displayName ||
-          squadra?.team?.name ||
-          "";
+    const formazioneCasa =
+      estraiFormazione(
+        rosterCasa,
+        nomeCasa,
+        dati
+      );
 
-        const id =
-          String(
-            squadra?.team?.id ||
-            ""
-          );
+    const formazioneTrasferta =
+      estraiFormazione(
+        rosterTrasferta,
+        nomeTrasferta,
+        dati
+      );
 
-        if (
-          id ===
-            String(
-              casa?.team?.id ||
-              ""
-            ) ||
-          nome === nomeCasa
-        ) {
-          formazioneCasa =
-            estraiFormazione(
-              squadra,
-              nomeCasa
-            );
-        }
+    /* =====================================================
+       STATISTICHE SQUADRE
+    ===================================================== */
 
-        if (
-          id ===
-            String(
-              trasferta?.team?.id ||
-              ""
-            ) ||
-          nome === nomeTrasferta
-        ) {
-          formazioneTrasferta =
-            estraiFormazione(
-              squadra,
-              nomeTrasferta
-            );
-        }
-      }
-    }
+    const statisticheCasa =
+      estraiStatisticheSquadra(
+        dati,
+        idCasa,
+        nomeCasa
+      );
 
-    if (!formazioneCasa) {
-      formazioneCasa =
-        estraiFormazione(
-          null,
-          nomeCasa
-        );
-    }
+    const statisticheTrasferta =
+      estraiStatisticheSquadra(
+        dati,
+        idTrasferta,
+        nomeTrasferta
+      );
 
-    if (!formazioneTrasferta) {
-      formazioneTrasferta =
-        estraiFormazione(
-          null,
-          nomeTrasferta
-        );
-    }
+    /* =====================================================
+       STATISTICHE GIOCATORI
+    ===================================================== */
 
-    /* -----------------------------------------------------
-       RISPOSTA
-    ----------------------------------------------------- */
+    const statisticheGiocatoriCasa =
+      estraiStatisticheGiocatori(
+        formazioneCasa
+      );
+
+    const statisticheGiocatoriTrasferta =
+      estraiStatisticheGiocatori(
+        formazioneTrasferta
+      );
+
+    /* =====================================================
+       EVENTI
+    ===================================================== */
+
+    const eventi =
+      estraiEventi(dati);
+
+    /* =====================================================
+       DATA
+    ===================================================== */
+
+    const dataPartita =
+      competizioneESPN?.date ||
+      dati?.header?.competitions?.[0]?.date ||
+      null;
+
+    /* =====================================================
+       STATO
+    ===================================================== */
+
+    const statoESPN =
+      competizioneESPN?.status?.type ||
+      {};
+
+    /* =====================================================
+       CACHE
+    ===================================================== */
 
     res.setHeader(
       "Cache-Control",
       "s-maxage=15, stale-while-revalidate=30"
     );
 
-    return res.status(200).json({
+    /* =====================================================
+       RISPOSTA
+    ===================================================== */
 
+    return res.status(200).json({
       success: true,
 
       fonte: "ESPN",
 
-      timezone:
-        "Europe/Rome",
+      fusoOrario: "Europe/Rome",
 
       competizione: {
         id:
@@ -529,28 +938,27 @@ module.exports = async (req, res) => {
         nome:
           competition.name,
 
-        espnLeague:
-          competition.espnLeague
+        campionatoESPN:
+          competition.espnLeague,
       },
 
       partita: {
-
         id:
           String(eventId),
 
         data:
-          competitionInfo?.date ||
-          dati?.header?.competitions?.[0]?.date ||
-          null,
+          dataPartita,
 
         casa: {
-
           id:
-            casa?.team?.id ||
-            null,
+            idCasa,
 
           nome:
             nomeCasa,
+
+          abbreviazione:
+            casa?.team?.abbreviation ||
+            null,
 
           logo:
             casa?.team?.logo ||
@@ -559,17 +967,19 @@ module.exports = async (req, res) => {
 
           gol:
             casa?.score ??
-            "0"
+            "0",
         },
 
         trasferta: {
-
           id:
-            trasferta?.team?.id ||
-            null,
+            idTrasferta,
 
           nome:
             nomeTrasferta,
+
+          abbreviazione:
+            trasferta?.team?.abbreviation ||
+            null,
 
           logo:
             trasferta?.team?.logo ||
@@ -578,42 +988,63 @@ module.exports = async (req, res) => {
 
           gol:
             trasferta?.score ??
-            "0"
+            "0",
         },
 
-        status: {
-
-          state:
-            competitionInfo?.status?.type?.state ||
+        stato: {
+          stato:
+            statoESPN?.state ||
             null,
 
-          description:
-            competitionInfo?.status?.type?.description ||
+          descrizione:
+            statoESPN?.description ||
             null,
 
-          detail:
-            competitionInfo?.status?.type?.detail ||
+          dettaglio:
+            statoESPN?.detail ||
             null,
 
-          completed:
-            competitionInfo?.status?.type?.completed ||
-            false
-        }
+          completata:
+            Boolean(
+              statoESPN?.completed
+            ),
+        },
       },
 
       formazioni: {
-
         casa:
           formazioneCasa,
 
         trasferta:
-          formazioneTrasferta
+          formazioneTrasferta,
       },
 
-      eventi:
-        estraiEventi(dati),
+      statistiche: {
+        squadre: {
+          casa:
+            statisticheCasa,
+
+          trasferta:
+            statisticheTrasferta,
+        },
+
+        giocatori: {
+          casa:
+            statisticheGiocatoriCasa,
+
+          trasferta:
+            statisticheGiocatoriTrasferta,
+        },
+      },
+
+      eventi,
 
       riepilogo: {
+        formazioneCasa:
+          formazioneCasa.modulo,
+
+        formazioneTrasferta:
+          formazioneTrasferta.modulo,
 
         titolariCasa:
           formazioneCasa.titolari.length,
@@ -627,6 +1058,22 @@ module.exports = async (req, res) => {
         riserveTrasferta:
           formazioneTrasferta.riserve.length,
 
+        statisticheSquadraCasa:
+          Object.keys(
+            statisticheCasa
+          ).length,
+
+        statisticheSquadraTrasferta:
+          Object.keys(
+            statisticheTrasferta
+          ).length,
+
+        statisticheGiocatoriCasa:
+          statisticheGiocatoriCasa.length,
+
+        statisticheGiocatoriTrasferta:
+          statisticheGiocatoriTrasferta.length,
+
         allenatoreCasa:
           Boolean(
             formazioneCasa.allenatore
@@ -635,22 +1082,20 @@ module.exports = async (req, res) => {
         allenatoreTrasferta:
           Boolean(
             formazioneTrasferta.allenatore
-          )
+          ),
       },
 
       messaggio:
-        "MatchStats ESPN completato"
+        "MatchStats ESPN completato",
     });
 
   } catch (errore) {
-
     console.error(
       "MATCHSTATS ESPN ERROR:",
       errore
     );
 
     return res.status(500).json({
-
       success: false,
 
       fonte: "ESPN",
@@ -660,7 +1105,7 @@ module.exports = async (req, res) => {
 
       dettaglio:
         errore?.message ||
-        "Errore sconosciuto"
+        "Errore sconosciuto",
     });
   }
 };
