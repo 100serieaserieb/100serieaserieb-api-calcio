@@ -119,43 +119,62 @@ function traduciStatistica(nome) {
     redCards: "Cartellini rossi",
     yellowCards: "Cartellini gialli",
     subIns: "Entrate dalla panchina",
+
     goalsConceded: "Gol subiti",
     saves: "Parate",
     shotsFaced: "Tiri subiti",
+
     goalAssists: "Assist",
     assists: "Assist",
+
     offsides: "Fuorigioco",
+
     totalGoals: "Gol",
     goals: "Gol",
+
     totalShots: "Tiri",
+    shots: "Tiri",
+
     minutesPlayed: "Minuti",
     touches: "Tocchi",
+
     passes: "Passaggi",
     accuratePasses: "Passaggi riusciti",
+
     possessionPct: "Possesso %",
+    possession: "Possesso %",
+
     tackles: "Contrasti",
     interceptions: "Intercetti",
     blocks: "Blocchi",
+
     clearances: "Disimpegni",
     effectiveClearance: "Disimpegni riusciti",
     totalClearance: "Disimpegni totali",
+
     totalTackles: "Contrasti totali",
     effectiveTackles: "Contrasti riusciti",
+
     totalShots: "Tiri",
     shotsOnTarget: "Tiri nello specchio",
     shotPct: "Percentuale tiro",
+
     wonCorners: "Calci d'angolo",
+
     penaltyKickGoals: "Rigori segnati",
     penaltyKickShots: "Rigori calciati",
+
     passPct: "Percentuale passaggi",
+
     accurateCrosses: "Cross riusciti",
     totalCrosses: "Cross",
     crossPct: "Percentuale cross",
+
     totalLongBalls: "Lanci lunghi",
     accurateLongBalls: "Lanci lunghi riusciti",
     longballPct: "Percentuale lanci lunghi",
+
     fouls: "Falli",
-    possession: "Possesso %",
   };
 
   return traduzioni[nome] || nome;
@@ -167,14 +186,25 @@ function traduciStatistiche(statistiche) {
   if (!statistiche) return risultato;
 
   for (const [chiave, valore] of Object.entries(statistiche)) {
-    risultato[traduciStatistica(chiave)] = valore;
+    if (
+      valore === undefined ||
+      valore === null ||
+      valore === ""
+    ) {
+      continue;
+    }
+
+    const nomeTradotto =
+      traduciStatistica(chiave);
+
+    risultato[nomeTradotto] = valore;
   }
 
   return risultato;
 }
 
 /* =========================================================
-   EXTRAZIONE STATISTICHE ATLETA
+   ESTRAZIONE STATISTICHE ATLETA
 ========================================================= */
 
 function estraiStatisticheAtleta(atleta) {
@@ -191,6 +221,8 @@ function estraiStatisticheAtleta(atleta) {
     if (!Array.isArray(gruppo)) continue;
 
     for (const elemento of gruppo) {
+      if (!elemento) continue;
+
       if (elemento?.name) {
         risultato[elemento.name] =
           elemento.value ??
@@ -218,7 +250,10 @@ function estraiStatisticheAtleta(atleta) {
    GIOCATORE
 ========================================================= */
 
-function preparaGiocatore(atleta, titolare = false) {
+function preparaGiocatore(
+  atleta,
+  titolare = false
+) {
   const datiAtleta =
     atleta?.athlete ||
     atleta;
@@ -338,6 +373,8 @@ function trovaRosterSquadra(
 
     if (
       idString &&
+      id !== undefined &&
+      id !== null &&
       String(id) === idString
     ) {
       return elemento;
@@ -345,6 +382,7 @@ function trovaRosterSquadra(
 
     if (
       teamName &&
+      nome &&
       String(nome).toLowerCase() ===
         String(teamName).toLowerCase()
     ) {
@@ -391,12 +429,11 @@ function estraiFormazione(
     roster?.formations?.formation ||
     null;
 
-  /* Alcune risposte ESPN possono avere il modulo
-     direttamente nella lista dei giocatori */
   if (!modulo) {
     const atletiPossibili =
       roster?.roster ||
       roster?.athletes ||
+      roster?.players ||
       [];
 
     if (Array.isArray(atletiPossibili)) {
@@ -436,8 +473,7 @@ function estraiFormazione(
   }
 
   if (!allenatore && roster?.coach) {
-    const coach =
-      roster.coach;
+    const coach = roster.coach;
 
     allenatore =
       coach?.displayName ||
@@ -490,6 +526,128 @@ function estraiFormazione(
 }
 
 /* =========================================================
+   FUNZIONI DI SUPPORTO STATISTICHE SQUADRA
+========================================================= */
+
+/*
+   Estrae un singolo valore da una statistica ESPN.
+*/
+function valoreStatistica(stat) {
+  if (!stat) return null;
+
+  if (
+    stat.displayValue !== undefined &&
+    stat.displayValue !== null
+  ) {
+    return stat.displayValue;
+  }
+
+  if (
+    stat.value !== undefined &&
+    stat.value !== null
+  ) {
+    return stat.value;
+  }
+
+  return null;
+}
+
+/*
+   Aggiunge una statistica evitando duplicati.
+*/
+function aggiungiStatistica(
+  risultato,
+  nome,
+  valore
+) {
+  if (!nome) return;
+
+  if (
+    valore === undefined ||
+    valore === null ||
+    valore === ""
+  ) {
+    return;
+  }
+
+  /*
+     Manteniamo la prima statistica valida.
+     In questo modo un eventuale duplicato
+     proveniente da ESPN non sovrascrive
+     inutilmente il valore.
+  */
+  if (
+    risultato[nome] === undefined ||
+    risultato[nome] === null
+  ) {
+    risultato[nome] = valore;
+  }
+}
+
+/*
+   Estrae ricorsivamente le statistiche da
+   una struttura ESPN conosciuta.
+*/
+function estraiArrayStatistiche(
+  array,
+  risultato
+) {
+  if (!Array.isArray(array)) return;
+
+  for (const elemento of array) {
+    if (!elemento) continue;
+
+    /*
+       Caso:
+       {
+         name: "totalShots",
+         value: 10,
+         displayValue: "10"
+       }
+    */
+    if (elemento.name) {
+      const valore =
+        valoreStatistica(elemento);
+
+      if (valore !== null) {
+        aggiungiStatistica(
+          risultato,
+          elemento.name,
+          valore
+        );
+      }
+    }
+
+    /*
+       Caso:
+       {
+         name: "...",
+         statistics: [...]
+       }
+    */
+    if (Array.isArray(elemento.statistics)) {
+      estraiArrayStatistiche(
+        elemento.statistics,
+        risultato
+      );
+    }
+
+    /*
+       Caso:
+       {
+         stats: [...]
+       }
+    */
+    if (Array.isArray(elemento.stats)) {
+      estraiArrayStatistiche(
+        elemento.stats,
+        risultato
+      );
+    }
+  }
+}
+
+/* =========================================================
    STATISTICHE SQUADRA
 ========================================================= */
 
@@ -500,123 +658,269 @@ function estraiStatisticheSquadra(
 ) {
   const risultato = {};
 
-  const boxscore =
-    dati?.boxscore;
+  /*
+     =======================================================
+     IMPORTANTE
+     =======================================================
+
+     Cerchiamo SEMPRE prima la squadra tramite ID.
+
+     Non prendiamo mai:
+     - statistiche della prima squadra
+     - statistiche della seconda squadra
+     - statistiche generiche della partita
+
+     e non le copiamo sull'altra squadra.
+
+     Questo impedisce che casa e trasferta
+     ricevano gli stessi valori.
+  */
+
+  const idCercato =
+    teamId !== null &&
+    teamId !== undefined
+      ? String(teamId)
+      : null;
+
+  const nomeCercato =
+    teamName
+      ? String(teamName).trim().toLowerCase()
+      : null;
+
+  /* =======================================================
+     1. BOX SCORE PLAYERS
+  ======================================================= */
 
   const players =
-    boxscore?.players;
+    dati?.boxscore?.players;
 
   if (Array.isArray(players)) {
-    for (const squadra of players) {
+    for (const gruppoSquadra of players) {
       const id =
-        squadra?.team?.id;
+        gruppoSquadra?.team?.id ??
+        gruppoSquadra?.teamId;
 
       const nome =
-        squadra?.team?.displayName ||
-        squadra?.team?.name ||
+        gruppoSquadra?.team?.displayName ||
+        gruppoSquadra?.team?.name ||
         "";
 
+      const idCoincide =
+        idCercato &&
+        id !== null &&
+        id !== undefined &&
+        String(id) === idCercato;
+
+      const nomeCoincide =
+        nomeCercato &&
+        nome &&
+        String(nome).trim().toLowerCase() ===
+          nomeCercato;
+
+      /*
+         Se l'ID esiste, utilizziamo SOLO l'ID.
+         Il nome viene usato soltanto quando
+         l'ID non è disponibile.
+      */
       const corrisponde =
-        (
-          teamId &&
-          String(id) === String(teamId)
-        ) ||
-        (
-          teamName &&
-          String(nome).toLowerCase() ===
-            String(teamName).toLowerCase()
-        );
+        idCercato
+          ? idCoincide
+          : nomeCoincide;
 
       if (!corrisponde) continue;
 
       const statistics =
-        squadra?.statistics ||
-        squadra?.teamStatistics ||
+        gruppoSquadra?.statistics ||
+        gruppoSquadra?.teamStatistics ||
         [];
 
-      if (Array.isArray(statistics)) {
-        for (const gruppo of statistics) {
-          if (!gruppo) continue;
+      estraiArrayStatistiche(
+        statistics,
+        risultato
+      );
 
-          const stats =
-            gruppo?.statistics ||
-            gruppo?.stats ||
-            [];
-
-          if (Array.isArray(stats)) {
-            for (const stat of stats) {
-              if (!stat?.name) continue;
-
-              risultato[stat.name] =
-                stat.displayValue ??
-                stat.value ??
-                null;
-            }
-          }
-
-          if (
-            gruppo?.name &&
-            (
-              gruppo?.displayValue !== undefined ||
-              gruppo?.value !== undefined
-            )
-          ) {
-            risultato[gruppo.name] =
-              gruppo.displayValue ??
-              gruppo.value;
-          }
-        }
+      /*
+         Alcune versioni ESPN possono avere
+         statistiche direttamente sotto il gruppo.
+      */
+      if (
+        Array.isArray(
+          gruppoSquadra?.stats
+        )
+      ) {
+        estraiArrayStatistiche(
+          gruppoSquadra.stats,
+          risultato
+        );
       }
     }
   }
 
-  /* -------------------------------------------------------
-     FALLBACK: statistiche nella competition
-  ------------------------------------------------------- */
+  /* =======================================================
+     2. COMPETITION -> COMPETITORS
+  ======================================================= */
+
+  /*
+     Questo NON è un fallback che copia dati.
+
+     Cerchiamo esclusivamente il competitor
+     appartenente alla squadra richiesta.
+  */
 
   const competizione =
     dati?.header?.competitions?.[0];
 
   const concorrenti =
-    competizione?.competitors || [];
+    competizione?.competitors;
 
-  const concorrente =
-    concorrenti.find(
-      (c) =>
-        (
-          teamId &&
-          String(c?.team?.id) ===
-            String(teamId)
-        ) ||
-        (
-          teamName &&
-          String(
-            c?.team?.displayName ||
-            c?.team?.name ||
-            ""
-          ).toLowerCase() ===
-            String(teamName).toLowerCase()
-        )
-    );
+  if (Array.isArray(concorrenti)) {
+    const concorrente =
+      concorrenti.find((c) => {
+        const id =
+          c?.team?.id;
 
-  if (
-    concorrente &&
-    Array.isArray(concorrente.statistics)
-  ) {
-    for (
-      const stat
-      of concorrente.statistics
+        const nome =
+          c?.team?.displayName ||
+          c?.team?.name ||
+          "";
+
+        if (idCercato) {
+          return (
+            id !== null &&
+            id !== undefined &&
+            String(id) === idCercato
+          );
+        }
+
+        return (
+          nomeCercato &&
+          String(nome).trim().toLowerCase() ===
+            nomeCercato
+        );
+      });
+
+    /*
+       Se ESPN ha trovato il competitor corretto,
+       estraiamo SOLO le sue statistiche.
+    */
+    if (
+      concorrente &&
+      Array.isArray(
+        concorrente.statistics
+      )
     ) {
-      if (!stat?.name) continue;
+      estraiArrayStatistiche(
+        concorrente.statistics,
+        risultato
+      );
+    }
 
-      risultato[stat.name] =
-        stat.displayValue ??
-        stat.value ??
-        null;
+    if (
+      concorrente &&
+      Array.isArray(
+        concorrente.stats
+      )
+    ) {
+      estraiArrayStatistiche(
+        concorrente.stats,
+        risultato
+      );
     }
   }
 
-  return traduciStatistiche(risultato);
+  /* =======================================================
+     3. ALTRE STRUTTURE ESPN
+  ======================================================= */
+
+  /*
+     Alcune risposte possono contenere una struttura
+     statistics direttamente dentro il competitor.
+
+     Anche qui controlliamo SEMPRE l'ID.
+  */
+
+  if (Array.isArray(concorrenti)) {
+    for (const concorrente of concorrenti) {
+      const id =
+        concorrente?.team?.id;
+
+      if (
+        !idCercato ||
+        id === null ||
+        id === undefined ||
+        String(id) !== idCercato
+      ) {
+        continue;
+      }
+
+      if (
+        Array.isArray(
+          concorrente?.statistics
+        )
+      ) {
+        estraiArrayStatistiche(
+          concorrente.statistics,
+          risultato
+        );
+      }
+
+      if (
+        Array.isArray(
+          concorrente?.stats
+        )
+      ) {
+        estraiArrayStatistiche(
+          concorrente.stats,
+          risultato
+        );
+      }
+    }
+  }
+
+  /* =======================================================
+     TRADUZIONE
+  ======================================================= */
+
+  return traduciStatistiche(
+    risultato
+  );
+}
+
+/* =========================================================
+   CONTROLLO STATISTICHE UGUALI
+========================================================= */
+
+/*
+   Questa funzione NON copia statistiche.
+
+   Serve solo a diagnosticare un eventuale problema
+   della risposta ESPN.
+
+   Se due squadre hanno statistiche completamente
+   identiche, segnaliamo quali statistiche sono uguali.
+*/
+
+function confrontaStatistiche(
+  casa,
+  trasferta
+) {
+  const uguali = [];
+
+  const chiaviCasa =
+    Object.keys(casa || {});
+
+  for (const chiave of chiaviCasa) {
+    if (
+      trasferta &&
+      trasferta[chiave] !== undefined &&
+      String(casa[chiave]) ===
+        String(trasferta[chiave])
+    ) {
+      uguali.push(chiave);
+    }
+  }
+
+  return uguali;
 }
 
 /* =========================================================
@@ -874,6 +1178,25 @@ module.exports = async (req, res) => {
       );
 
     /* =====================================================
+       CONTROLLO STATISTICHE
+    ===================================================== */
+
+    const statisticheUguali =
+      confrontaStatistiche(
+        statisticheCasa,
+        statisticheTrasferta
+      );
+
+    /*
+       NON modifichiamo i dati.
+
+       Le statistiche uguali possono essere realmente
+       uguali (es. cartellini rossi = 0, falli = 10 ecc.).
+
+       Vengono solamente riportate nel debug.
+    */
+
+    /* =====================================================
        STATISTICHE GIOCATORI
     ===================================================== */
 
@@ -1067,6 +1390,17 @@ module.exports = async (req, res) => {
           Object.keys(
             statisticheTrasferta
           ).length,
+
+        /*
+           Elenco delle statistiche che hanno
+           casualmente lo stesso valore per entrambe
+           le squadre.
+
+           NON significa che siano sbagliate:
+           ad esempio entrambe possono avere 2 cartellini.
+        */ 
+        statisticheConValoreUguale:
+          statisticheUguali,
 
         statisticheGiocatoriCasa:
           statisticheGiocatoriCasa.length,
