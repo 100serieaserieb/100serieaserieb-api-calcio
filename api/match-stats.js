@@ -1,45 +1,10 @@
-const https = require("https");
+const {
+  getCompetition
+} = require("../lib/competitions");
 
-const { getCompetition } = require("../lib/competitions");
-
-function richiesta(url) {
-  return new Promise((resolve, reject) => {
-    https
-      .get(
-        url,
-        {
-          headers: {
-            "User-Agent": "Mozilla/5.0",
-            Accept: "application/json",
-          },
-        },
-        (res) => {
-          let dati = "";
-
-          res.on("data", (chunk) => {
-            dati += chunk;
-          });
-
-          res.on("end", () => {
-            if (res.statusCode < 200 || res.statusCode >= 300) {
-              return reject(
-                new Error(`ESPN HTTP ${res.statusCode}`)
-              );
-            }
-
-            try {
-              resolve(JSON.parse(dati));
-            } catch (errore) {
-              reject(
-                new Error("Risposta ESPN non valida")
-              );
-            }
-          });
-        }
-      )
-      .on("error", reject);
-  });
-}
+const {
+  getMatchSummary
+} = require("../lib/espn");
 
 /* =========================================================
    TRADUZIONE POSIZIONI
@@ -52,9 +17,11 @@ function traduciPosizione(posizione) {
 
   const posizioni = {
     Goalkeeper: "Portiere",
+
     "Center Back": "Difensore centrale",
     "Center Left Defender": "Difensore centrale sinistro",
     "Center Right Defender": "Difensore centrale destro",
+
     "Left Back": "Terzino sinistro",
     "Right Back": "Terzino destro",
 
@@ -76,11 +43,9 @@ function traduciPosizione(posizione) {
     Striker: "Attaccante",
     Forward: "Attaccante",
 
-    Goalkeeper: "Portiere",
-
     Attaccante: "Attaccante",
     Portiere: "Portiere",
-    Riserva: "Riserva",
+    Riserva: "Riserva"
   };
 
   return posizioni[posizione] || posizione;
@@ -115,7 +80,7 @@ function traduciStatistica(nome) {
     tackles: "Contrasti",
     interceptions: "Intercetti",
     blocks: "Blocchi",
-    clearances: "Disimpegni",
+    clearances: "Disimpegni"
   };
 
   return traduzioni[nome] || nome;
@@ -189,9 +154,10 @@ function preparaGiocatore(atleta, titolare = false) {
         ? String(numero)
         : null,
 
-    posizione: titolare
-      ? traduciPosizione(posizione)
-      : "Riserva",
+    posizione:
+      titolare
+        ? traduciPosizione(posizione)
+        : "Riserva",
 
     titolare,
 
@@ -207,7 +173,7 @@ function preparaGiocatore(atleta, titolare = false) {
       null,
 
     statistiche:
-      traduciStatistiche(statistiche),
+      traduciStatistiche(statistiche)
   };
 }
 
@@ -226,7 +192,7 @@ function estraiFormazione(roster, squadra) {
       allenatore: null,
       titolari,
       riserve,
-      totaleGiocatori: 0,
+      totaleGiocatori: 0
     };
   }
 
@@ -288,12 +254,12 @@ function estraiFormazione(roster, squadra) {
     riserve,
     totaleGiocatori:
       titolari.length +
-      riserve.length,
+      riserve.length
   };
 }
 
 /* =========================================================
-   EVENTI DELLA PARTITA
+   EVENTI
 ========================================================= */
 
 function estraiEventi(dati) {
@@ -338,7 +304,7 @@ function estraiEventi(dati) {
 
     squadra:
       evento?.team?.displayName ||
-      null,
+      null
   }));
 }
 
@@ -348,12 +314,21 @@ function estraiEventi(dati) {
 
 module.exports = async (req, res) => {
   try {
+
+    /* -----------------------------------------------------
+       METODO
+    ----------------------------------------------------- */
+
     if (req.method !== "GET") {
       return res.status(405).json({
         success: false,
-        error: "Metodo non consentito",
+        error: "Metodo non consentito"
       });
     }
+
+    /* -----------------------------------------------------
+       PARAMETRI
+    ----------------------------------------------------- */
 
     const competitionId =
       req.query?.competition;
@@ -366,7 +341,7 @@ module.exports = async (req, res) => {
       return res.status(400).json({
         success: false,
         error:
-          "Parametro competition obbligatorio",
+          "Parametro competition obbligatorio"
       });
     }
 
@@ -374,9 +349,13 @@ module.exports = async (req, res) => {
       return res.status(400).json({
         success: false,
         error:
-          "Parametro id obbligatorio",
+          "Parametro id obbligatorio"
       });
     }
+
+    /* -----------------------------------------------------
+       COMPETIZIONE
+    ----------------------------------------------------- */
 
     const competition =
       getCompetition(
@@ -387,7 +366,7 @@ module.exports = async (req, res) => {
       return res.status(404).json({
         success: false,
         error:
-          "Competizione non trovata",
+          "Competizione non trovata"
       });
     }
 
@@ -395,42 +374,49 @@ module.exports = async (req, res) => {
       return res.status(400).json({
         success: false,
         error:
-          "Codice ESPN della competizione non configurato",
+          "Codice ESPN della competizione non configurato"
       });
     }
 
-    const url =
-      `https://site.api.espn.com/apis/site/v2/sports/soccer/${competition.espnLeague}/summary?event=${encodeURIComponent(
-        eventId
-      )}`;
+    /* -----------------------------------------------------
+       ESPN SUMMARY
+    ----------------------------------------------------- */
 
     const dati =
-      await richiesta(url);
+      await getMatchSummary(
+        competition.espnLeague,
+        eventId
+      );
 
-    const competizione =
+    /* -----------------------------------------------------
+       DATI PARTITA
+    ----------------------------------------------------- */
+
+    const competitionInfo =
       dati?.header?.competitions?.[0];
 
-    if (!competizione) {
+    if (!competitionInfo) {
       return res.status(404).json({
         success: false,
         error:
-          "Partita non trovata",
+          "Partita non trovata"
       });
     }
 
     const concorrenti =
-      competizione?.competitors || [];
+      competitionInfo?.competitors ||
+      [];
 
     const casa =
       concorrenti.find(
         (squadra) =>
-          squadra.homeAway === "home"
+          squadra?.homeAway === "home"
       );
 
     const trasferta =
       concorrenti.find(
         (squadra) =>
-          squadra.homeAway === "away"
+          squadra?.homeAway === "away"
       );
 
     const nomeCasa =
@@ -443,9 +429,9 @@ module.exports = async (req, res) => {
       trasferta?.team?.name ||
       "Squadra trasferta";
 
-    /* =====================================================
-       ROSTER
-    ===================================================== */
+    /* -----------------------------------------------------
+       ROSTER / FORMAZIONI
+    ----------------------------------------------------- */
 
     const roster =
       dati?.roster ||
@@ -456,7 +442,9 @@ module.exports = async (req, res) => {
     let formazioneTrasferta = null;
 
     if (Array.isArray(roster)) {
+
       for (const squadra of roster) {
+
         const nome =
           squadra?.team?.displayName ||
           squadra?.team?.name ||
@@ -470,8 +458,10 @@ module.exports = async (req, res) => {
 
         if (
           id ===
-          String(casa?.team?.id || "")
-          ||
+            String(
+              casa?.team?.id ||
+              ""
+            ) ||
           nome === nomeCasa
         ) {
           formazioneCasa =
@@ -483,11 +473,10 @@ module.exports = async (req, res) => {
 
         if (
           id ===
-          String(
-            trasferta?.team?.id ||
-            ""
-          )
-          ||
+            String(
+              trasferta?.team?.id ||
+              ""
+            ) ||
           nome === nomeTrasferta
         ) {
           formazioneTrasferta =
@@ -515,17 +504,9 @@ module.exports = async (req, res) => {
         );
     }
 
-    /* =====================================================
-       DATA PARTITA
-    ===================================================== */
-
-    const dataPartita =
-      dati?.header?.competitions?.[0]?.date ||
-      null;
-
-    /* =====================================================
+    /* -----------------------------------------------------
        RISPOSTA
-    ===================================================== */
+    ----------------------------------------------------- */
 
     res.setHeader(
       "Cache-Control",
@@ -533,6 +514,7 @@ module.exports = async (req, res) => {
     );
 
     return res.status(200).json({
+
       success: true,
 
       fonte: "ESPN",
@@ -548,17 +530,21 @@ module.exports = async (req, res) => {
           competition.name,
 
         espnLeague:
-          competition.espnLeague,
+          competition.espnLeague
       },
 
       partita: {
+
         id:
           String(eventId),
 
         data:
-          dataPartita,
+          competitionInfo?.date ||
+          dati?.header?.competitions?.[0]?.date ||
+          null,
 
         casa: {
+
           id:
             casa?.team?.id ||
             null,
@@ -573,10 +559,11 @@ module.exports = async (req, res) => {
 
           gol:
             casa?.score ??
-            "0",
+            "0"
         },
 
         trasferta: {
+
           id:
             trasferta?.team?.id ||
             null,
@@ -591,40 +578,43 @@ module.exports = async (req, res) => {
 
           gol:
             trasferta?.score ??
-            "0",
+            "0"
         },
 
         status: {
+
           state:
-            dati?.header?.competitions?.[0]?.status?.type?.state ||
+            competitionInfo?.status?.type?.state ||
             null,
 
           description:
-            dati?.header?.competitions?.[0]?.status?.type?.description ||
+            competitionInfo?.status?.type?.description ||
             null,
 
           detail:
-            dati?.header?.competitions?.[0]?.status?.type?.detail ||
+            competitionInfo?.status?.type?.detail ||
             null,
 
           completed:
-            dati?.header?.competitions?.[0]?.status?.type?.completed ||
-            false,
-        },
+            competitionInfo?.status?.type?.completed ||
+            false
+        }
       },
 
       formazioni: {
+
         casa:
           formazioneCasa,
 
         trasferta:
-          formazioneTrasferta,
+          formazioneTrasferta
       },
 
       eventi:
         estraiEventi(dati),
 
       riepilogo: {
+
         titolariCasa:
           formazioneCasa.titolari.length,
 
@@ -645,20 +635,22 @@ module.exports = async (req, res) => {
         allenatoreTrasferta:
           Boolean(
             formazioneTrasferta.allenatore
-          ),
+          )
       },
 
       messaggio:
-        "MatchStats ESPN completato",
+        "MatchStats ESPN completato"
     });
 
   } catch (errore) {
+
     console.error(
       "MATCHSTATS ESPN ERROR:",
       errore
     );
 
     return res.status(500).json({
+
       success: false,
 
       fonte: "ESPN",
@@ -668,7 +660,7 @@ module.exports = async (req, res) => {
 
       dettaglio:
         errore?.message ||
-        "Errore sconosciuto",
+        "Errore sconosciuto"
     });
   }
 };
